@@ -1,0 +1,27 @@
+// ============================================================================
+// Tang Nano 20K (GW2AR-LV18QN88C8/I7) physical pin constraints for tiny-gpu.
+// Top module: top  (src/top.sv)
+//
+// Pin numbers verified against the Sipeed Tang Nano 20K schematic / wiki:
+//   - 27 MHz crystal -> PIN 4
+//   - LED0..LED5     -> PIN 15,16,17,18,19,20  (active-LOW)
+//   - user button S1 -> PIN 88                 (active-LOW)
+// ============================================================================
+
+// ---- 27 MHz system clock ----
+IO_LOC  "clk" 4;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// ---- 6 onboard LEDs (active-low) ----
+IO_LOC  "led[0]" 15;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[1]" 16;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[2]" 17;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[3]" 18;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[4]" 19;
+IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "led[5]" 20;
+IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
