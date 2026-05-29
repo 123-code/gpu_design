@@ -2,47 +2,34 @@
 `timescale 1ns/1ns
 
 // ============================================================================
-// Tang Nano 20K top-level wrapper for tiny-gpu.
+// Tang Nano 20K top-level for tiny-gpu, with UART result reporting.
 //
-// Runs software/kernel.hex once (5 * 3) and shows the result on the 6 LEDs:
-//   - while running : all LEDs dark
-//   - when finished : LED5 = "done", LED3..0 = result nibble
-//     5 * 3 = 15 = 0b001111  ->  LED5 on, LED4 off, LED3..0 on
-//
-// IMPORTANT — why the GPU runs on a DIVIDED clock, not the full 27 MHz:
-//   Static timing passes at 27 MHz, but the worst hold path (the LSU's
-//   lsu_state register) has only ~0.4 ns of margin. Real-world clock skew
-//   eats that, corrupting lsu_state -> the scheduler hangs in its WAIT state
-//   and never reaches DONE (LEDs stay dark). The core only needs to run the
-//   kernel once and briefly, so we clock it at ~13 kHz where timing is safe.
-//   At that rate the whole program finishes in well under 10 ms (instant to
-//   the eye). See diag/ for how this was diagnosed on hardware.
-//
-// LEDs are active-LOW; the logical pattern is inverted on the way out.
+//   - GPU runs on a divided ~13 kHz clock (timing-safe), computes 5*3 = 15.
+//   - When done, LED5 + LED3..0 show the result (1111 = 15).
+//   - The result is transmitted over UART (115200 8N1, PIN 69) as ASCII
+//     decimal digits + CRLF, e.g. "015\r\n", and RE-SENT about every 0.6 s
+//     so you can open the serial monitor at any time and still see it.
 // ============================================================================
 module top (
-    input  wire       clk,        // 27 MHz crystal  (PIN 4)
-    output wire [5:0] led         // 6 onboard LEDs, active-LOW (PIN 15..20)
+    input  wire       clk,          // 27 MHz crystal  (PIN 4)
+    output wire       uart_tx_out,   // UART TX -> USB-serial (PIN 69)
+    output wire [5:0] led            // 6 onboard LEDs, active-LOW (PIN 15..20)
 );
-    // NOTE: no button reset. An earlier version gated reset on the S1 button
-    // (PIN 88); if that pin doesn't read high when unpressed it pins the GPU
-    // in reset forever (dark LEDs). Power-on reset is all we need here.
-
-    // ---- divide 27 MHz -> ~13 kHz GPU clock (div[10] toggles every 1024 cycles) ----
+    // ---- divide 27 MHz -> ~13 kHz GPU clock ----
     reg [10:0] div = 11'd0;
     always @(posedge clk) div <= div + 1'b1;
     wire gpu_clk = div[10];
 
-    // ---- power-on reset on the GPU clock ----
+    // ---- power-on reset (on the GPU clock) ----
     reg [3:0] por = 4'd0;
     wire por_done = &por;
     always @(posedge gpu_clk)
         if (!por_done) por <= por + 1'b1;
 
-    wire reset  = !por_done;   // gpu reset is active-HIGH
+    wire reset  = !por_done;   // active-HIGH
     wire enable = por_done;
 
-    // ---- the GPU ----
+    // ---- the GPU (slow clock) ----
     wire [7:0] result;
     wire       done;
 
@@ -52,8 +39,86 @@ module top (
         .enable(enable),
         .result(result),
         .done(done),
-        .debug_core_state(),     // unused at top level
-        .debug_instruction()     // unused at top level
+        .debug_core_state(),
+        .debug_instruction()
+    );
+
+    // ========================================================================
+    // Everything below runs in the fast 27 MHz domain (matches uart baud).
+    // ========================================================================
+
+    // Synchronize the slow-domain 'done' into the fast domain (2 FFs).
+    reg done_s1 = 1'b0, done_s2 = 1'b0;
+    always @(posedge clk) begin
+        done_s1 <= done;
+        done_s2 <= done_s1;
+    end
+
+    // Periodic ~0.6 s tick (2^24 / 27 MHz). Re-sends the result so you can
+    // attach the serial monitor at any time and still catch it.
+    reg [23:0] hb = 24'd0;
+    always @(posedge clk) hb <= hb + 1'b1;
+    wire send_msg = (hb == 24'd0);
+
+    // Decimal digits of the result (0..255).
+    wire [7:0] d100 = (result / 100);
+    wire [7:0] d10  = (result / 10) % 8'd10;
+    wire [7:0] d1   = (result % 8'd10);
+
+    // The 5-byte message: "DDD\r\n", selected by idx.
+    reg  [2:0] idx;
+    reg  [7:0] tx_byte;
+    always @(*) begin
+        case (idx)
+            3'd0:    tx_byte = 8'h30 + d100[3:0]; // '0' + hundreds
+            3'd1:    tx_byte = 8'h30 + d10[3:0];  // '0' + tens
+            3'd2:    tx_byte = 8'h30 + d1[3:0];   // '0' + ones
+            3'd3:    tx_byte = 8'h0D;             // CR
+            default: tx_byte = 8'h0A;             // LF (idx 4)
+        endcase
+    end
+
+    // Message-sender FSM: hands each byte to uart_tx and waits for it to finish.
+    wire uart_busy;
+    reg  tx_start;
+    localparam S_IDLE = 2'd0, S_REQ = 2'd1, S_BUSY = 2'd2, S_DONE = 2'd3;
+    reg [1:0] mstate;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            mstate   <= S_IDLE;
+            idx      <= 3'd0;
+            tx_start <= 1'b0;
+        end else begin
+            tx_start <= 1'b0; // default: one-cycle pulse only
+            case (mstate)
+                S_IDLE:  if (send_msg && done_s2) begin
+                             idx    <= 3'd0;
+                             mstate <= S_REQ;
+                         end
+                S_REQ:   if (!uart_busy) begin
+                             tx_start <= 1'b1;     // kick off this byte
+                             mstate   <= S_BUSY;
+                         end
+                S_BUSY:  if (uart_busy) mstate <= S_DONE; // byte started
+                S_DONE:  if (!uart_busy) begin            // byte finished
+                             if (idx == 3'd4) mstate <= S_IDLE;
+                             else begin
+                                 idx    <= idx + 3'd1;
+                                 mstate <= S_REQ;
+                             end
+                         end
+            endcase
+        end
+    end
+
+    uart_tx my_uart (
+        .clk(clk),                 // 27 MHz -> matches BAUD_LIMIT=234
+        .reset(reset),
+        .data_in(tx_byte),
+        .tx_start(tx_start),
+        .tx_out(uart_tx_out),
+        .tx_busy(uart_busy)
     );
 
     // ---- LED display (active-low) ----

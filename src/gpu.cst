@@ -5,12 +5,17 @@
 // Pin numbers verified against the Sipeed Tang Nano 20K schematic / wiki:
 //   - 27 MHz crystal -> PIN 4
 //   - LED0..LED5     -> PIN 15,16,17,18,19,20  (active-LOW)
-//   - user button S1 -> PIN 88                 (active-LOW)
+//   - UART TX        -> PIN 69                 (onboard USB-serial)
 // ============================================================================
 
 // ---- 27 MHz system clock ----
 IO_LOC  "clk" 4;
 IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// ---- UART TX -> onboard USB-serial bridge (BL616), 115200 8N1 ----
+// FPGA TX is PIN 69 on the Tang Nano 20K (PIN 70 is RX).
+IO_LOC  "uart_tx_out" 69;
+IO_PORT "uart_tx_out" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
 
 // ---- 6 onboard LEDs (active-low) ----
 IO_LOC  "led[0]" 15;

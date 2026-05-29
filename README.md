@@ -14,7 +14,8 @@ on the onboard LEDs.
 
 ```
 src/        SystemVerilog: gpu, core, scheduler, decoder, registers, alu, pc, lsu, ...
-            top.sv          board top-level (LED demo)
+            top.sv          board top-level (LED demo + UART result reporting)
+            uart_tx.sv      115200 8N1 UART transmitter
             gpu.cst         Tang Nano 20K pin constraints
             gpu.sdc         27 MHz timing constraint
 software/   Rust assembler (src/main.rs) + kernel (test_kernel.asm -> kernel.hex)
@@ -49,6 +50,16 @@ make flash-persist  # write to SPI flash (survives power cycle)
 
 When it runs you should see **LED5 (done) + LED3..0 = `1111` (=15)** lit, with
 LED4 dark.
+
+### Serial output
+
+`top.sv` also transmits the result over the onboard USB-serial bridge
+(**115200 8N1**, FPGA TX = PIN 69) as ASCII decimal + CRLF (`"015\r\n"`),
+re-sent ~every 0.6 s so you can attach a terminal at any time:
+
+```sh
+screen /dev/cu.usbserial-XXXX 115200   # the UART interface (not the JTAG one)
+```
 
 ## Notes / gotchas (learned the hard way on hardware)
 
