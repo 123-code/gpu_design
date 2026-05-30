@@ -16,6 +16,7 @@ on the onboard LEDs.
 src/        SystemVerilog: gpu, core, scheduler, decoder, registers, alu, pc, lsu, ...
             top.sv          board top-level (LED demo + UART result reporting)
             uart_tx.sv      115200 8N1 UART transmitter
+            uart_rx.sv      115200 8N1 UART receiver
             gpu.cst         Tang Nano 20K pin constraints
             gpu.sdc         27 MHz timing constraint
 software/   Rust assembler (src/main.rs) + kernel (test_kernel.asm -> kernel.hex)
@@ -51,15 +52,26 @@ make flash-persist  # write to SPI flash (survives power cycle)
 When it runs you should see **LED5 (done) + LED3..0 = `1111` (=15)** lit, with
 LED4 dark.
 
-### Serial output
+### Serial I/O — send operands, get the product back
 
-`top.sv` also transmits the result over the onboard USB-serial bridge
-(**115200 8N1**, FPGA TX = PIN 69) as ASCII decimal + CRLF (`"015\r\n"`),
-re-sent ~every 0.6 s so you can attach a terminal at any time:
+`top.sv` speaks **bidirectional UART** over the onboard USB-serial bridge
+(**115200 8N1**, FPGA TX = PIN 69, RX = PIN 70):
+
+- **Send** two decimal numbers + Enter, e.g. `7 6`. They patch the kernel's
+  operands (`R4 = A`, `R2 = B`); the GPU re-runs and computes `A * B` by
+  repeated addition.
+- **Receive** the result back as ASCII decimal + CRLF, e.g. `042\r\n`.
 
 ```sh
 screen /dev/cu.usbserial-XXXX 115200   # the UART interface (not the JTAG one)
+# type:  7 6 <Enter>   ->   042
 ```
+
+Operands are **6-bit (0–63)** (they land in 6-bit MOV immediates) and the result
+is 8-bit, so keep the product ≤ 255. The latest result also shows on the LEDs
+(`LED5` = done, `LED3..0` = low nibble). Implemented by `uart_rx.sv` + a decimal
+parser and re-run controller in `top.sv`; operands are injected by patching the
+ROM in `src/program_memory.sv` (addr 1 → `R2`, addr 3 → `R4`).
 
 ## Notes / gotchas (learned the hard way on hardware)
 

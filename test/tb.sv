@@ -8,11 +8,14 @@ module tb;
     reg reset;
     reg enable;
 
-    // 2. Instantiate the Top-Level GPU
+    // 2. Instantiate the Top-Level GPU.
+    //    Operands default to 5 and 3 here, so the self-check expects 5*3 = 15.
     gpu uut (
         .clk(clk),
         .reset(reset),
-        .enable(enable)
+        .enable(enable),
+        .operand_a(6'd5),   // -> R4 (addend)
+        .operand_b(6'd3)    // -> R2 (loop count)
     );
 
     // 3. The Virtual Metronome

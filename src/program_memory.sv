@@ -7,7 +7,13 @@ module program_memory #(
 ) (
     input wire clk,
     input wire [7:0] address,    // From the Fetcher/PC
-    output reg [WIDTH-1:0] instruction
+    output reg [WIDTH-1:0] instruction,
+
+    // Runtime operands injected over UART. These overwrite the 6-bit immediate
+    // fields of the two operand-loading MOV instructions in the kernel:
+    //   addr 1: MOV R2,#B (loop count)  addr 3: MOV R4,#A (addend)
+    input wire [5:0] operand_a,  // -> R4 (addr 3)
+    input wire [5:0] operand_b   // -> R2 (addr 1)
 );
 
     // Physically allocate a block of BRAM on the FPGA
@@ -22,9 +28,14 @@ module program_memory #(
         $readmemh("/Users/joseignacio/tiny-gpu-fpga/software/kernel.hex", rom_array);
     end
 
-    // Clock-synchronous read (Standard BRAM behavior)
+    // Clock-synchronous read (Standard BRAM behavior). Two operand-loading
+    // instructions get their immediate field replaced with the live UART values.
     always @(posedge clk) begin
-        instruction <= rom_array[address];
+        case (address)
+            8'd1:    instruction <= {rom_array[1][15:6], operand_b}; // MOV R2,#B
+            8'd3:    instruction <= {rom_array[3][15:6], operand_a}; // MOV R4,#A
+            default: instruction <= rom_array[address];
+        endcase
     end
 
 endmodule

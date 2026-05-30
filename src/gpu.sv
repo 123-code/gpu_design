@@ -12,7 +12,11 @@ module gpu (
 
     // Extra debug taps for hardware bring-up
     output wire [2:0] debug_core_state,
-    output wire [15:0] debug_instruction
+    output wire [15:0] debug_instruction,
+
+    // Runtime operands (from UART) injected into the kernel's MOV immediates
+    input wire [5:0] operand_a,  // -> R4 (addend)
+    input wire [5:0] operand_b   // -> R2 (loop count)
 );
 
     wire core_0_start, core_1_start;
@@ -46,9 +50,12 @@ module gpu (
     program_memory rom (
         .clk(clk),
         // Listen to Core 0's PC
-        .address(core_0_instruction_address), 
+        .address(core_0_instruction_address),
         // Output the 16-bit instruction
-        .instruction(current_instruction)     
+        .instruction(current_instruction),
+        // Live operands patched into the kernel
+        .operand_a(operand_a),
+        .operand_b(operand_b)
     );
 
     // ==========================================
