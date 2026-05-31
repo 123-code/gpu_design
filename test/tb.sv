@@ -15,7 +15,8 @@ module tb;
         .reset(reset),
         .enable(enable),
         .operand_a(6'd5),   // -> R4 (addend)
-        .operand_b(6'd3)    // -> R2 (loop count)
+        .operand_b(6'd3),   // -> R2 (loop count)
+        .mem_rdata(8'd0)    // no LDR in this kernel
     );
 
     // 3. The Virtual Metronome

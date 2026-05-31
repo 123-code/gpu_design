@@ -16,7 +16,11 @@ module gpu (
 
     // Runtime operands (from UART) injected into the kernel's MOV immediates
     input wire [5:0] operand_a,  // -> R4 (addend)
-    input wire [5:0] operand_b   // -> R2 (loop count)
+    input wire [5:0] operand_b,  // -> R2 (loop count)
+
+    // Core 0's data-memory read port (to main_memory via the system top)
+    output wire [9:0] mem_raddr,
+    input  wire [7:0] mem_rdata
 );
 
     wire core_0_start, core_1_start;
@@ -76,7 +80,11 @@ module gpu (
 
         // Expose the result to the top level
         .result(result),
-        .debug_core_state(debug_core_state)
+        .debug_core_state(debug_core_state),
+
+        // Data memory read port
+        .mem_raddr(mem_raddr),
+        .mem_rdata(mem_rdata)
     );
 
     // (Compute Core 1 left disconnected from ROM for this specific simulation test)
@@ -89,7 +97,9 @@ module gpu (
         .block_id(core_1_id),
         .done(core_1_done),
         .instruction_address(),
-        .current_instruction(16'd0) 
+        .current_instruction(16'd0),
+        .mem_raddr(),
+        .mem_rdata(8'd0)
     );
 
 endmodule

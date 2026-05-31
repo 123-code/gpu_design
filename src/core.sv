@@ -2,13 +2,20 @@
 `timescale 1ns/1ns
 
 module core #(
-    parameter THREADS_PER_BLOCK = 4
+    parameter THREADS_PER_BLOCK = 4,
+    parameter ADDR_BITS = 10
 ) (
     input wire clk,
     input wire reset,
-    input wire start,            
-    input wire [7:0] block_id,   
+    input wire start,
+    input wire [7:0] block_id,
     output wire done,
+
+    // ==========================================
+    // DATA MEMORY READ PORT (serialized across threads by lsu_arbiter)
+    // ==========================================
+    output wire [ADDR_BITS-1:0] mem_raddr,
+    input  wire [7:0]           mem_rdata,
 
     // ==========================================
     // NEW: THE MEMORY SPINE
@@ -106,12 +113,35 @@ module core #(
     wire [7:0] pc_bus [THREADS_PER_BLOCK-1:0];
     wire [7:0] next_pc_bus [THREADS_PER_BLOCK-1:0];
 
-    // Dummy memory interface for the LSUs (real memory not wired yet)
+    // Per-thread LSU memory request/response wires (serviced by lsu_arbiter).
     wire lsu_mem_valid [THREADS_PER_BLOCK-1:0];
     wire [7:0] lsu_mem_addr [THREADS_PER_BLOCK-1:0];
     wire [7:0] lsu_mem_write_data [THREADS_PER_BLOCK-1:0];
-    wire lsu_mem_ready = 1'b0;          // No memory yet → never ready
-    wire [7:0] lsu_mem_read_data = 8'd0;
+    wire [THREADS_PER_BLOCK-1:0] arb_ready;
+    wire [7:0] arb_rdata [THREADS_PER_BLOCK-1:0];
+
+    // Pack the per-thread valid flags into a bus for the arbiter.
+    wire [THREADS_PER_BLOCK-1:0] lsu_req;
+    genvar v;
+    generate
+        for (v = 0; v < THREADS_PER_BLOCK; v = v + 1)
+            assign lsu_req[v] = lsu_mem_valid[v];
+    endgenerate
+
+    // 4 -> 1 read-port arbiter (snapshot-and-drain; latency hidden in WAIT state).
+    lsu_arbiter #(
+        .THREADS(THREADS_PER_BLOCK),
+        .ADDR_BITS(ADDR_BITS)
+    ) core_lsu_arbiter (
+        .clk(clk),
+        .reset(reset),
+        .req(lsu_req),
+        .addr(lsu_mem_addr),
+        .mem_raddr(mem_raddr),
+        .mem_rdata(mem_rdata),
+        .ready(arb_ready),
+        .rdata(arb_rdata)
+    );
 
     // Thread 0's PC drives the instruction ROM address (simple skeleton)
     assign instruction_address = pc_bus[0];
@@ -159,8 +189,12 @@ module core #(
     generate
         for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : thread_block
             
-            // Real registers module ports
-            registers thread_regs (
+            // Real registers module ports. THREAD_ID(i) makes %threadIdx (R15)
+            // hold this lane's index, so SIMT threads can address distinct data.
+            registers #(
+                .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+                .THREAD_ID(i)
+            ) thread_regs (
                 .clk(clk),
                 .reset(reset),
                 .enable(1'b1),
@@ -211,8 +245,8 @@ module core #(
                 .mem_valid(lsu_mem_valid[i]),
                 .mem_addr(lsu_mem_addr[i]),
                 .mem_write_data(lsu_mem_write_data[i]),
-                .mem_ready(lsu_mem_ready),
-                .mem_read_data(lsu_mem_read_data),
+                .mem_ready(arb_ready[i]),
+                .mem_read_data(arb_rdata[i]),
 
                 .lsu_state(lsu_states[i]),
                 .lsu_out(lsu_out_bus[i])
