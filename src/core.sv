@@ -45,6 +45,7 @@ module core #(
     wire decoded_alu_output_mux;
     wire decoded_pc_mux;
     wire decoded_ret;
+    wire decoded_mac_load;
 
     // ==========================================
     // INSTANTIATE THE (REAL) DECODER
@@ -70,7 +71,8 @@ module core #(
         .decoded_alu_arithmetic_mux(decoded_alu_arithmetic_mux),
         .decoded_alu_output_mux(decoded_alu_output_mux),
         .decoded_pc_mux(decoded_pc_mux),
-        .decoded_ret(decoded_ret)
+        .decoded_ret(decoded_ret),
+        .decoded_mac_load(decoded_mac_load)
     );
 
     // ==========================================
@@ -114,6 +116,45 @@ module core #(
     // Thread 0's PC drives the instruction ROM address (simple skeleton)
     assign instruction_address = pc_bus[0];
 
+    // ==========================================
+    // THE 3x3 MAC FUNCTIONAL UNIT (shared, core-level)
+    // ==========================================
+    // An 18-byte operand buffer bridges the "18 operands vs 2-operand datapath"
+    // gap: MACL pushes one register per instruction (9 pixels, then 9 weights);
+    // MAC reads the unit's result. Thread 0 drives the buffer (SIMT-uniform).
+    localparam UPDATE_STATE = 3'b110;
+    reg  [7:0] mac_buf [0:17];
+    reg  [4:0] mac_wptr;
+    wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11);
+
+    always @(posedge clk) begin
+        if (reset) begin
+            mac_wptr <= 5'd0;
+        end else if (core_state == UPDATE_STATE) begin
+            if (decoded_mac_load && mac_wptr < 5'd18) begin
+                mac_buf[mac_wptr] <= rs_bus[0];     // push this operand
+                mac_wptr <= mac_wptr + 5'd1;
+            end else if (mac_fire) begin
+                mac_wptr <= 5'd0;                   // consumed -> ready for next conv
+            end
+        end
+    end
+
+    wire [7:0] mac_result;
+    mac_array_3x3 u_mac (
+        .clk(clk),
+        .rst_n(~reset),
+        .valid_in(1'b1),
+        .px00(mac_buf[0]), .px01(mac_buf[1]),  .px02(mac_buf[2]),
+        .px10(mac_buf[3]), .px11(mac_buf[4]),  .px12(mac_buf[5]),
+        .px20(mac_buf[6]), .px21(mac_buf[7]),  .px22(mac_buf[8]),
+        .w00(mac_buf[9]),  .w01(mac_buf[10]),  .w02(mac_buf[11]),
+        .w10(mac_buf[12]), .w11(mac_buf[13]),  .w12(mac_buf[14]),
+        .w20(mac_buf[15]), .w21(mac_buf[16]),  .w22(mac_buf[17]),
+        .pixel_out(mac_result),
+        .valid_out()
+    );
+
     genvar i;
     generate
         for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : thread_block
@@ -140,6 +181,7 @@ module core #(
                 .rs(rs_bus[i]),
                 .rt(rt_bus[i]),
 
+                .mac_result(mac_result),
                 .debug_reg3(reg3_bus[i])
             );
 

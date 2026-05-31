@@ -40,6 +40,9 @@ module registers #(
     output reg [7:0] rs,
     output reg [7:0] rt,
 
+    // Result from the shared 3x3 MAC unit (written back by the MAC instruction)
+    input wire [DATA_BITS-1:0] mac_result,
+
     // Debug tap: continuously expose R3 (the kernel's accumulator) so the
     // top-level wrapper can show the result on the board LEDs.
     output wire [7:0] debug_reg3
@@ -48,7 +51,8 @@ module registers #(
     // Human-readable names for the Input Multiplexer (The routing switch)
     localparam ARITHMETIC = 2'b00,
                MEMORY     = 2'b01,
-               CONSTANT   = 2'b10;
+               CONSTANT   = 2'b10,
+               MAC        = 2'b11;
 
     // ==========================================
     // PART 5: THE INTERNAL VAULT (The Memory Cells)
@@ -105,8 +109,11 @@ module registers #(
                         MEMORY: begin 
                             registers[decoded_rd_address] <= lsu_out; // Save Memory answer [cite: 343]
                         end
-                        CONSTANT: begin 
+                        CONSTANT: begin
                             registers[decoded_rd_address] <= decoded_immediate; // Save raw number [cite: 344]
+                        end
+                        MAC: begin
+                            registers[decoded_rd_address] <= mac_result; // Save 3x3 MAC result
                         end
                     endcase
                 end

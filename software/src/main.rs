@@ -76,6 +76,20 @@ fn assemble_line(line: &str) -> Option<String> {
             binary_out.push_str(&format!("{}{}{}{}", opcode, dest, src1, imm));
         }
 
+        // Opcode: 0110 (MAC load: push a register into the MAC operand buffer)
+        "MACL" => {
+            let opcode = "0110";
+            let src1 = reg_to_bin(parts[1]); // register to push -> [8:6]
+            binary_out.push_str(&format!("{}{}{}{}", opcode, "000", src1, "000000"));
+        }
+
+        // Opcode: 0111 (MAC fire: write the 3x3 MAC result into rd)
+        "MAC" => {
+            let opcode = "0111";
+            let dest = reg_to_bin(parts[1]); // result register -> [11:9]
+            binary_out.push_str(&format!("{}{}{}{}", opcode, dest, "000", "000000"));
+        }
+
         // Opcode: 1000 (Branch if Negative)
         "BRn" => {
             let opcode = "1000";
@@ -103,10 +117,15 @@ fn assemble_line(line: &str) -> Option<String> {
 }
 
 fn main() -> io::Result<()> {
-    let input_file = File::open("test_kernel.asm")?;
+    // Usage: assembler [input.asm] [output.hex]  (defaults preserve old behavior)
+    let args: Vec<String> = std::env::args().collect();
+    let in_path  = args.get(1).map(String::as_str).unwrap_or("test_kernel.asm");
+    let out_path = args.get(2).map(String::as_str).unwrap_or("kernel.hex");
+
+    let input_file = File::open(in_path)?;
     let reader = BufReader::new(input_file);
-    
-    let mut output_file = File::create("kernel.hex")?;
+
+    let mut output_file = File::create(out_path)?;
 
     println!("{:<20} | {:<18} | {:<4}", "Assembly", "Binary", "Hex");
     println!("{:-<50}", "");
@@ -126,6 +145,6 @@ fn main() -> io::Result<()> {
     }
 
     println!("{:-<50}", "");
-    println!("Compilation successful! Wrote to kernel.hex");
+    println!("Compilation successful! Wrote to {}", out_path);
     Ok(())
 }

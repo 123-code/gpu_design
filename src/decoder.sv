@@ -28,11 +28,14 @@ module decoder (
     output reg decoded_nzp_write_enable,           
     
     // Group C: Multiplexers (Multi-bit wires telling components HOW to behave)
-    output reg [1:0] decoded_reg_input_mux,        
-    output reg [1:0] decoded_alu_arithmetic_mux,   
-    output reg decoded_alu_output_mux,             
-    output reg decoded_pc_mux,                     
-    output reg decoded_ret                         
+    output reg [1:0] decoded_reg_input_mux,
+    output reg [1:0] decoded_alu_arithmetic_mux,
+    output reg decoded_alu_output_mux,
+    output reg decoded_pc_mux,
+    output reg decoded_ret,
+
+    // MAC unit control: push an operand into the MAC buffer this instruction
+    output reg decoded_mac_load
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -41,8 +44,16 @@ module decoder (
     localparam CMP  = 4'b0011;
     localparam LDR  = 4'b0100;
     localparam ADDI = 4'b0101;
+    localparam MACL = 4'b0110; // push a register into the MAC operand buffer
+    localparam MAC  = 4'b0111; // fire the MAC, write result to rd
     localparam BRn  = 4'b1000;
     localparam RET  = 4'b1111;
+
+    // decoded_reg_input_mux selectors (must match registers.sv)
+    localparam MUX_ARITHMETIC = 2'b00;
+    localparam MUX_MEMORY     = 2'b01;
+    localparam MUX_CONSTANT   = 2'b10;
+    localparam MUX_MAC        = 2'b11;
 
     // ==========================================
     // PART 3: THE INTERNAL LOGIC MACHINERY
@@ -68,6 +79,7 @@ module decoder (
             decoded_alu_output_mux <= 0;
             decoded_pc_mux <= 0;
             decoded_ret <= 0;
+            decoded_mac_load <= 0;
 
         end else begin
             // Only trigger the logic machinery if the 3 core_state wires read '010' (State 2)
@@ -97,6 +109,7 @@ module decoder (
                 decoded_reg_input_mux <= 0;
                 decoded_pc_mux <= 0;
                 decoded_ret <= 0;
+                decoded_mac_load <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -122,7 +135,16 @@ module decoder (
                         // Load: read from memory, then write the result back to rd
                         decoded_reg_write_enable <= 1;
                         decoded_mem_read_enable  <= 1;
-                        decoded_reg_input_mux    <= 2'b01; // MEMORY (see registers.sv)
+                        decoded_reg_input_mux    <= MUX_MEMORY;
+                    end
+                    MACL: begin
+                        // Push rs into the MAC operand buffer (no register write)
+                        decoded_mac_load <= 1;
+                    end
+                    MAC: begin
+                        // Fire the MAC and write its result into rd
+                        decoded_reg_write_enable <= 1;
+                        decoded_reg_input_mux    <= MUX_MAC;
                     end
                     BRn: begin
                         // Branch: tell pc.sv to route the jump target into the PC

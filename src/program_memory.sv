@@ -23,9 +23,13 @@ module program_memory #(
     // NOTE: absolute path on purpose — Gowin synthesis runs from impl/gwsynthesis/,
     // so a relative path silently fails to load (ROM fills with 0s and the whole
     // design constant-folds away). Update this if you move the repo.
+    // Override with e.g. iverilog -DKERNEL_HEX="\"...conv_kernel.hex\"" for tests.
+`ifndef KERNEL_HEX
+    `define KERNEL_HEX "/Users/joseignacio/tiny-gpu-fpga/software/kernel.hex"
+`endif
     initial begin
         // The Rust assembler writes this file (software/src/main.rs).
-        $readmemh("/Users/joseignacio/tiny-gpu-fpga/software/kernel.hex", rom_array);
+        $readmemh(`KERNEL_HEX, rom_array);
     end
 
     // Clock-synchronous read (Standard BRAM behavior). Two operand-loading

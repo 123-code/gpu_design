@@ -4,6 +4,7 @@ impl/
 
 # iverilog simulation outputs
 gpu_sim
+mac_sim
 *.vcd
 
 # Rust assembler build

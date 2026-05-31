@@ -37,8 +37,19 @@ diag/       hardware bring-up diagnostics (blink, slow-clock FSM viewer)
 | 0010 | `MOV rd,#imm` | rd = imm |
 | 0011 | `CMP rs,rt` | set N/Z/P flags |
 | 0100 | `LDR` | load (stub) |
+| 0110 | `MACL Rs` | push Rs into the 3×3 MAC operand buffer |
+| 0111 | `MAC rd` | fire the 3×3 MAC, write result to rd |
 | 1000 | `BRn target` | branch if N flag set |
 | 1111 | `RET` | halt thread |
+
+### 3×3 MAC unit
+
+`src/mac_array_3x3.v` (a CNN convolution MAC: 9 unsigned pixels × 9 signed
+weights → adder tree → ReLU + quantize `>>8`) is wired in as a core-level
+functional unit. Because 18 operands don't fit the 2-operand datapath, an
+18-byte buffer is filled with `MACL` (9 pixels, then 9 weights), then `MAC rd`
+writes the result. See `software/conv_kernel.asm` for a worked example
+(`9·30·20 → 21`). Synthesizes to 5 DSP blocks; verified on hardware.
 
 ## Quick start
 
