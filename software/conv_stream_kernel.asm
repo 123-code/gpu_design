@@ -1,0 +1,59 @@
+// Streaming conv: load 9 pixels (mem[0..8]) then 9 weights (mem[9..17])
+// via LDR, push each into the MAC, then fire it. Signed 8-bit weights.
+MOV R1, #0
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+LDR R5, [R1]
+MACL R5
+ADD R1, R1, #1
+MAC R3
+RET

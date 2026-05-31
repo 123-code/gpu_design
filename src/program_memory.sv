@@ -32,14 +32,13 @@ module program_memory #(
         $readmemh(`KERNEL_HEX, rom_array);
     end
 
-    // Clock-synchronous read (Standard BRAM behavior). Two operand-loading
-    // instructions get their immediate field replaced with the live UART values.
+    // Clock-synchronous read (Standard BRAM behavior).
+    // NOTE: operand_a/operand_b (the old MOV-immediate injection hack) are no
+    // longer applied — they corrupted the [5:0] field of any instruction at
+    // address 1 or 3. Runtime operands now arrive via the DMA into data memory
+    // and are fetched with LDR. The ports are kept (unused) for compatibility.
     always @(posedge clk) begin
-        case (address)
-            8'd1:    instruction <= {rom_array[1][15:6], operand_b}; // MOV R2,#B
-            8'd3:    instruction <= {rom_array[3][15:6], operand_a}; // MOV R4,#A
-            default: instruction <= rom_array[address];
-        endcase
+        instruction <= rom_array[address];
     end
 
 endmodule
