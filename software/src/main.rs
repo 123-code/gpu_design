@@ -46,6 +46,18 @@ fn assemble_line(line: &str) -> Option<String> {
             binary_out.push_str(&format!("{}{}{}{}", opcode, dest, src1, src2_imm));
         }
 
+        // General ALU ops:  OP Rd, Rs, Rt   (rd = rs op rt)
+        "MUL" | "SUB" | "SHR" | "SHL" => {
+            let opcode = match instruction {
+                "MUL" => "1010", "SHR" => "1100", "SHL" => "1101", "SUB" => "1110",
+                _ => unreachable!(),
+            };
+            let dest = reg_to_bin(parts[1]);
+            let src1 = reg_to_bin(parts[2]);
+            let src2 = reg_to_bin(parts[3]);
+            binary_out.push_str(&format!("{}{}{}{}{}", opcode, dest, src1, "000", src2));
+        }
+
         // Opcode: 0010
         "MOV" => {
             let opcode = "0010";

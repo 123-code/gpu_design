@@ -47,6 +47,10 @@ module decoder (
     localparam CMP  = 4'b0011;
     localparam LDR  = 4'b0100;
     localparam ADDI = 4'b0101;
+    localparam MUL  = 4'b1010; // general arithmetic primitives (rd = rs op rt)
+    localparam SHR  = 4'b1100;
+    localparam SHL  = 4'b1101;
+    localparam SUB  = 4'b1110;
     localparam MACL = 4'b0110; // push a register into the MAC operand buffer
     localparam MAC  = 4'b0111; // fire the MAC, write result to rd
     localparam BRn  = 4'b1000;
@@ -127,6 +131,10 @@ module decoder (
                     end
                     ADDI: begin
                         // rs + immediate -> rd (ALU selects imm via the opcode)
+                        decoded_reg_write_enable <= 1;
+                    end
+                    MUL, SUB, SHR, SHL: begin
+                        // General ALU ops: rd = rs (op) rt, written via ARITHMETIC mux
                         decoded_reg_write_enable <= 1;
                     end
                     MOV: begin 
