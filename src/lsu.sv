@@ -26,10 +26,18 @@ module lsu #(
     input wire mem_ready,                // "Request complete!"
     input wire [7:0] mem_read_data,      // Payload from RAM
 
+    // Memory-mapped emit (STR to offset 63 -> UART TX). Handshake throttles the
+    // GPU to UART speed: emit_valid holds until emit_ready, stalling the scheduler.
+    output reg       emit_valid,
+    output reg [7:0] emit_data,
+    input  wire      emit_ready,
+
     // Output back to Thread
     output reg [1:0] lsu_state,          // 00=IDLE, 01=REQ, 10=WAIT, 11=DONE
     output reg [7:0] lsu_out             // Hand data back to Registers
 );
+
+    localparam MMIO_TX = 8'd63;          // reserved offset -> UART TX register
 
     // Data-memory base pointer. Effective LDR address = base + rs. Moved in
     // small steps with ADDB, so the kernel can stride a full image without ever
@@ -42,11 +50,34 @@ module lsu #(
             mem_valid <= 0;
             lsu_out <= 0;
             base <= '0;
+            emit_valid <= 0;
+            emit_data <= 0;
         end else if (enable) begin
 
             // ADDB: advance the base pointer in the UPDATE phase.
             if (decoded_base_add && core_state == 3'b110)
                 base <= base + decoded_immediate;
+
+            // --- STR: store / memory-mapped emit ---
+            if (decoded_mem_write) begin
+                case (lsu_state)
+                    2'b00: if (core_state == 3'b011) lsu_state <= 2'b01; // wake on REQUEST
+                    2'b01: begin // decode the target
+                        if (rs == MMIO_TX) begin
+                            emit_valid <= 1'b1;          // route data to UART TX
+                            emit_data  <= rt;
+                            lsu_state  <= 2'b10;         // wait for the byte to be accepted
+                        end else begin
+                            lsu_state <= 2'b11;          // (non-MMIO store: no-op for now)
+                        end
+                    end
+                    2'b10: if (emit_ready) begin          // UART took the byte
+                        emit_valid <= 1'b0;
+                        lsu_state  <= 2'b11;
+                    end
+                    2'b11: if (core_state == 3'b110) lsu_state <= 2'b00;
+                endcase
+            end
 
             // If the Decoder flags this as a Memory Read (LDR)
             if (decoded_mem_read) begin

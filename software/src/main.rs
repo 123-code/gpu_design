@@ -100,6 +100,14 @@ fn assemble_line(line: &str) -> Option<String> {
             binary_out.push_str(&format!("{}{}{}{}", opcode, condition, empty, target));
         }
 
+        // Opcode: 1011 (STR Rdata, [Raddr]: store/emit; addr 63 -> UART TX)
+        "STR" => {
+            let opcode = "1011";
+            let data = reg_to_bin(parts[1]);                                  // [2:0]
+            let addr = reg_to_bin(parts[2].trim_matches(|c| c == '[' || c == ']')); // [8:6]
+            binary_out.push_str(&format!("{}{}{}{}{}", opcode, "000", addr, "000", data));
+        }
+
         // Opcode: 1001 (ADDB #imm: advance the data-memory base pointer)
         "ADDB" => {
             let opcode = "1001";

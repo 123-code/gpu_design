@@ -17,6 +17,11 @@ module core #(
     output wire [ADDR_BITS-1:0] mem_raddr,
     input  wire [7:0]           mem_rdata,
 
+    // Memory-mapped emit (thread 0's STR to offset 63 -> UART TX)
+    output wire                 emit_valid,
+    output wire [7:0]           emit_data,
+    input  wire                 emit_ready,
+
     // ==========================================
     // NEW: THE MEMORY SPINE
     // ==========================================
@@ -121,6 +126,12 @@ module core #(
     wire [7:0] lsu_mem_write_data [THREADS_PER_BLOCK-1:0];
     wire [THREADS_PER_BLOCK-1:0] arb_ready;
     wire [7:0] arb_rdata [THREADS_PER_BLOCK-1:0];
+
+    // Per-thread emit; only thread 0's reaches the UART (one feature map).
+    wire [THREADS_PER_BLOCK-1:0] lsu_emit_valid;
+    wire [7:0] lsu_emit_data [THREADS_PER_BLOCK-1:0];
+    assign emit_valid = lsu_emit_valid[0];
+    assign emit_data  = lsu_emit_data[0];
 
     // Pack the per-thread valid flags into a bus for the arbiter.
     wire [THREADS_PER_BLOCK-1:0] lsu_req;
@@ -251,6 +262,10 @@ module core #(
                 .mem_write_data(lsu_mem_write_data[i]),
                 .mem_ready(arb_ready[i]),
                 .mem_read_data(arb_rdata[i]),
+
+                .emit_valid(lsu_emit_valid[i]),
+                .emit_data(lsu_emit_data[i]),
+                .emit_ready(emit_ready),
 
                 .lsu_state(lsu_states[i]),
                 .lsu_out(lsu_out_bus[i])

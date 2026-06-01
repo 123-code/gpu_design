@@ -13,7 +13,8 @@ module tb;
         .enable(enable),
         .operand_a(6'd0),   // unused by the conv kernel
         .operand_b(6'd0),
-        .mem_rdata(8'd0)    // no LDR in this kernel
+        .mem_rdata(8'd0),   // no LDR in this kernel
+        .emit_ready(1'b0)
     );
 
     always #18.5 clk = ~clk;

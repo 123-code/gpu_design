@@ -65,6 +65,10 @@ module top #(
     wire gpu_enable = armed && (&runrst);
 
     // ---- the GPU ----
+    wire       emit_valid;
+    wire [7:0] emit_data;
+    reg        emit_ready;
+
     gpu uut (
         .clk(clk),
         .reset(gpu_reset),
@@ -76,62 +80,43 @@ module top #(
         .operand_a(6'd0),             // operand-injection unused in host-driven mode
         .operand_b(6'd0),
         .mem_raddr(mem_raddr),
-        .mem_rdata(mem_rdata)
+        .mem_rdata(mem_rdata),
+        .emit_valid(emit_valid),
+        .emit_data(emit_data),
+        .emit_ready(emit_ready)
     );
 
     // ========================================================================
-    // Result reporting over UART TX: send `result` as ASCII decimal + CRLF on
-    // the rising edge of `done` (one reply per completed run).
+    // Memory-mapped emit -> UART TX (one raw byte per STR to offset 63).
+    // The handshake (emit_valid held until emit_ready) throttles the GPU to the
+    // UART byte rate, so no output is dropped.
     // ========================================================================
-    reg done_d = 1'b0;
-    always @(posedge clk) done_d <= done;
-    wire send_msg = done & ~done_d;
-
-    reg [7:0] result_q = 8'd0;
-    always @(posedge clk) if (send_msg) result_q <= result;
-
-    wire [7:0] d100 = (result_q / 100);
-    wire [7:0] d10  = (result_q / 10) % 8'd10;
-    wire [7:0] d1   = (result_q % 8'd10);
-
-    reg [2:0] idx;
-    reg [7:0] tx_byte;
-    always @(*) begin
-        case (idx)
-            3'd0:    tx_byte = 8'h30 + d100[3:0];
-            3'd1:    tx_byte = 8'h30 + d10[3:0];
-            3'd2:    tx_byte = 8'h30 + d1[3:0];
-            3'd3:    tx_byte = 8'h0D;
-            default: tx_byte = 8'h0A;
-        endcase
-    end
-
     wire uart_busy;
     reg  tx_start;
-    reg  pending;
-    localparam S_IDLE = 2'd0, S_REQ = 2'd1, S_BUSY = 2'd2, S_DONE = 2'd3;
-    reg [1:0] mstate;
+    localparam E_IDLE = 2'd0, E_SEND = 2'd1, E_WAIT = 2'd2;
+    reg [1:0] estate;
     always @(posedge clk) begin
         if (sys_reset) begin
-            mstate <= S_IDLE; idx <= 3'd0; tx_start <= 1'b0; pending <= 1'b0;
+            estate <= E_IDLE; tx_start <= 1'b0; emit_ready <= 1'b0;
         end else begin
-            tx_start <= 1'b0;
-            if (send_msg) pending <= 1'b1;
-            case (mstate)
-                S_IDLE:  if (pending) begin pending <= 1'b0; idx <= 3'd0; mstate <= S_REQ; end
-                S_REQ:   if (!uart_busy) begin tx_start <= 1'b1; mstate <= S_BUSY; end
-                S_BUSY:  if (uart_busy) mstate <= S_DONE;
-                S_DONE:  if (!uart_busy) begin
-                             if (idx == 3'd4) mstate <= S_IDLE;
-                             else begin idx <= idx + 3'd1; mstate <= S_REQ; end
-                         end
+            tx_start <= 1'b0; emit_ready <= 1'b0;
+            case (estate)
+                E_IDLE: if (emit_valid && !uart_busy) begin
+                            tx_start <= 1'b1;            // launch emit_data
+                            estate   <= E_SEND;
+                        end
+                E_SEND: if (uart_busy) estate <= E_WAIT; // byte started
+                E_WAIT: if (!uart_busy) begin            // byte fully sent
+                            emit_ready <= 1'b1;          // ack the GPU's STR
+                            estate     <= E_IDLE;
+                        end
             endcase
         end
     end
 
-    uart_tx u_tx (
+    uart_tx #(.BAUD_LIMIT(CLK_FREQ / BAUD_RATE)) u_tx (
         .clk(clk), .reset(sys_reset),
-        .data_in(tx_byte), .tx_start(tx_start),
+        .data_in(emit_data), .tx_start(tx_start),
         .tx_out(uart_tx_out), .tx_busy(uart_busy)
     );
 

@@ -51,6 +51,7 @@ module decoder (
     localparam MAC  = 4'b0111; // fire the MAC, write result to rd
     localparam BRn  = 4'b1000;
     localparam ADDB = 4'b1001; // base += immediate (data-memory base pointer)
+    localparam STR  = 4'b1011; // store/emit: write rt to [rs] (MMIO TX when rs==63)
     localparam RET  = 4'b1111;
 
     // decoded_reg_input_mux selectors (must match registers.sv)
@@ -160,6 +161,11 @@ module decoder (
                     ADDB: begin
                         // Advance the data-memory base pointer by the immediate.
                         decoded_base_add <= 1;
+                    end
+                    STR: begin
+                        // Store/emit: the LSU writes rt to the address in rs
+                        // (rs == 63 routes to the memory-mapped UART TX).
+                        decoded_mem_write_enable <= 1;
                     end
                     RET: begin 
                         decoded_ret <= 1;                     

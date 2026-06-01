@@ -1,19 +1,19 @@
 `default_nettype none
 `timescale 1ns/1ns
 
-module uart_tx (
+module uart_tx #(
+    parameter BAUD_LIMIT = 234   // 27 MHz / 115200 baud; override (small) in sim
+) (
     input wire clk,           // The 27 MHz system clock
     input wire reset,
-    
+
     input wire [7:0] data_in, // The 8-bit answer coming out of the FIFO
     input wire tx_start,      // A pulse telling us to grab the data and start sending
-    
+
     output reg tx_out,        // The single physical copper wire to the laptop
     output reg tx_busy        // Tells the FIFO "Hold on, I'm shifting!"
 );
 
-    // 27,000,000 Hz / 115,200 Baud = ~234 clock ticks per bit
-    localparam BAUD_LIMIT = 234; 
     
     // State Machine
     localparam IDLE = 2'b00, START_BIT = 2'b01, DATA_BITS = 2'b10, STOP_BIT = 2'b11;
