@@ -53,6 +53,7 @@ module core #(
     wire decoded_pc_mux;
     wire decoded_ret;
     wire decoded_mac_load;
+    wire decoded_base_add;
 
     // ==========================================
     // INSTANTIATE THE (REAL) DECODER
@@ -79,7 +80,8 @@ module core #(
         .decoded_alu_output_mux(decoded_alu_output_mux),
         .decoded_pc_mux(decoded_pc_mux),
         .decoded_ret(decoded_ret),
-        .decoded_mac_load(decoded_mac_load)
+        .decoded_mac_load(decoded_mac_load),
+        .decoded_base_add(decoded_base_add)
     );
 
     // ==========================================
@@ -115,7 +117,7 @@ module core #(
 
     // Per-thread LSU memory request/response wires (serviced by lsu_arbiter).
     wire lsu_mem_valid [THREADS_PER_BLOCK-1:0];
-    wire [7:0] lsu_mem_addr [THREADS_PER_BLOCK-1:0];
+    wire [ADDR_BITS-1:0] lsu_mem_addr [THREADS_PER_BLOCK-1:0];
     wire [7:0] lsu_mem_write_data [THREADS_PER_BLOCK-1:0];
     wire [THREADS_PER_BLOCK-1:0] arb_ready;
     wire [7:0] arb_rdata [THREADS_PER_BLOCK-1:0];
@@ -229,8 +231,8 @@ module core #(
                 .alu_out(alu_out_bus[i])
             );
 
-            // Real LSU + dummy memory pins
-            lsu thread_lsu (
+            // Real LSU (base+offset addressing into main_memory via the arbiter)
+            lsu #(.ADDR_BITS(ADDR_BITS)) thread_lsu (
                 .clk(clk),
                 .reset(reset),
                 .enable(1'b1),
@@ -238,6 +240,8 @@ module core #(
 
                 .decoded_mem_read(decoded_mem_read_enable),
                 .decoded_mem_write(decoded_mem_write_enable),
+                .decoded_base_add(decoded_base_add),
+                .decoded_immediate(decoded_immediate),
 
                 .rs(rs_bus[i]),
                 .rt(rt_bus[i]),

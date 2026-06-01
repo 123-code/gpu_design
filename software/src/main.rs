@@ -100,6 +100,13 @@ fn assemble_line(line: &str) -> Option<String> {
             binary_out.push_str(&format!("{}{}{}{}", opcode, condition, empty, target));
         }
 
+        // Opcode: 1001 (ADDB #imm: advance the data-memory base pointer)
+        "ADDB" => {
+            let opcode = "1001";
+            let imm = imm_to_bin(parts[1], 6);
+            binary_out.push_str(&format!("{}{}{}{}", opcode, "000", "000", imm));
+        }
+
         // Opcode: 1111
         "RET" => {
             binary_out.push_str("1111000000000000");

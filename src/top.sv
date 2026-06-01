@@ -15,7 +15,9 @@
 // pulses gpu_start (no power-on auto-run). Everything is on one 27 MHz clock.
 // ============================================================================
 module top #(
-    parameter PAYLOAD_BYTES = 793        // 784-byte image + 9 signed weights
+    parameter PAYLOAD_BYTES = 793,       // 784-byte image + 9 signed weights
+    parameter CLK_FREQ      = 27000000,  // for the UART bit timing (override in sim)
+    parameter BAUD_RATE     = 115200
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
@@ -37,7 +39,9 @@ module top #(
 
     data_pipeline #(
         .ADDR_BITS(10),
-        .PAYLOAD_BYTES(PAYLOAD_BYTES)
+        .PAYLOAD_BYTES(PAYLOAD_BYTES),
+        .CLK_FREQ(CLK_FREQ),
+        .BAUD_RATE(BAUD_RATE)
     ) pipe (
         .clk(clk), .reset(sys_reset),
         .uart_rx_in(uart_rx_in),

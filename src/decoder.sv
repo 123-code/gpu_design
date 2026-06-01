@@ -35,7 +35,10 @@ module decoder (
     output reg decoded_ret,
 
     // MAC unit control: push an operand into the MAC buffer this instruction
-    output reg decoded_mac_load
+    output reg decoded_mac_load,
+
+    // Address unit: add decoded_immediate to the LSU base pointer this instruction
+    output reg decoded_base_add
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -47,6 +50,7 @@ module decoder (
     localparam MACL = 4'b0110; // push a register into the MAC operand buffer
     localparam MAC  = 4'b0111; // fire the MAC, write result to rd
     localparam BRn  = 4'b1000;
+    localparam ADDB = 4'b1001; // base += immediate (data-memory base pointer)
     localparam RET  = 4'b1111;
 
     // decoded_reg_input_mux selectors (must match registers.sv)
@@ -80,6 +84,7 @@ module decoder (
             decoded_pc_mux <= 0;
             decoded_ret <= 0;
             decoded_mac_load <= 0;
+            decoded_base_add <= 0;
 
         end else begin
             // Only trigger the logic machinery if the 3 core_state wires read '010' (State 2)
@@ -110,6 +115,7 @@ module decoder (
                 decoded_pc_mux <= 0;
                 decoded_ret <= 0;
                 decoded_mac_load <= 0;
+                decoded_base_add <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -150,6 +156,10 @@ module decoder (
                         // Branch: tell pc.sv to route the jump target into the PC
                         // (gated by the saved N/Z/P flags vs decoded_nzp).
                         decoded_pc_mux <= 1;
+                    end
+                    ADDB: begin
+                        // Advance the data-memory base pointer by the immediate.
+                        decoded_base_add <= 1;
                     end
                     RET: begin 
                         decoded_ret <= 1;                     

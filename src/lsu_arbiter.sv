@@ -17,8 +17,8 @@ module lsu_arbiter #(
     input  wire                 reset,
 
     // ---- requests from the thread LSUs ----
-    input  wire [THREADS-1:0]   req,          // mem_valid[i]
-    input  wire [7:0]           addr  [THREADS-1:0],  // mem_addr[i] (8-bit from rs)
+    input  wire [THREADS-1:0]      req,        // mem_valid[i]
+    input  wire [ADDR_BITS-1:0]    addr  [THREADS-1:0],  // full mem_addr[i] (base+offset)
 
     // ---- single read port into main_memory ----
     output reg  [ADDR_BITS-1:0] mem_raddr,
@@ -68,7 +68,7 @@ module lsu_arbiter #(
 
                 S_SERVE: if (any) begin
                             svc       <= sel;
-                            mem_raddr <= {{(ADDR_BITS-8){1'b0}}, addr[sel]}; // 8 -> ADDR_BITS
+                            mem_raddr <= addr[sel];        // full base+offset address
                             state     <= S_WAIT;
                         end else begin
                             state <= S_DRAIN;          // all bits serviced
