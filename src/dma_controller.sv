@@ -41,6 +41,7 @@ module dma_controller #(
 
     reg                  state;
     reg [ADDR_BITS-1:0]  wptr;          // the memory write pointer
+    reg                  gpu_done_d;    // for rising-edge detection of gpu_done
 
     always @(posedge clk) begin
         if (reset) begin
@@ -51,11 +52,13 @@ module dma_controller #(
             mem_wdata <= 8'd0;
             gpu_start <= 1'b0;
             loading   <= 1'b1;
+            gpu_done_d <= 1'b0;
         end else begin
             // Registered memory controls + the start pulse default to inactive;
             // they assert for exactly one cycle when something happens.
             mem_we    <= 1'b0;
             gpu_start <= 1'b0;
+            gpu_done_d <= gpu_done;
 
             case (state)
                 // ============================================================
@@ -87,7 +90,12 @@ module dma_controller #(
                 // ============================================================
                 S_RUN: begin
                     loading <= 1'b0;
-                    if (gpu_done) state <= S_LOAD;   // ready for the next payload
+                    // Re-arm on a FRESH completion (rising edge of gpu_done), not
+                    // its level. After a run, gpu_done stays high until the next
+                    // run resets the GPU; using the level would bounce us straight
+                    // back to S_LOAD on the next run's first cycle and block that
+                    // run's memory writes (stale-result bug).
+                    if (gpu_done && !gpu_done_d) state <= S_LOAD;
                 end
 
                 default: state <= S_LOAD;
