@@ -3,7 +3,7 @@
 
 module core #(
     parameter THREADS_PER_BLOCK = 4,
-    parameter ADDR_BITS = 12
+    parameter ADDR_BITS = 13
 ) (
     input wire clk,
     input wire reset,
@@ -190,25 +190,33 @@ module core #(
     // gap: MACL pushes one register per instruction (9 pixels, then 9 weights);
     // MAC reads the unit's result. Thread 0 drives the buffer (SIMT-uniform).
     localparam UPDATE_STATE = 3'b110;
-    reg  [7:0] mac_buf [0:17];
-    reg  [4:0] mac_wptr;
-    // Conv-MAC fires on the MAC writeback mux, but NOT when the same mux is being
-    // borrowed by the FC coprocessor's FRD readback.
+    // Pixel buffer only: the 9 conv weights are CONSTANT (part of the trained
+    // model) and baked below, so a conv window just pushes 9 pixels with MACL.
+    reg  [7:0] mac_buf [0:8];
+    reg  [3:0] mac_wptr;
     wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11)
                           && !decoded_fc_read;
 
     always @(posedge clk) begin
         if (reset) begin
-            mac_wptr <= 5'd0;
+            mac_wptr <= 4'd0;
         end else if (core_state == UPDATE_STATE) begin
-            if (decoded_mac_load && mac_wptr < 5'd18) begin
-                mac_buf[mac_wptr] <= rs_bus[0];     // push this operand
-                mac_wptr <= mac_wptr + 5'd1;
+            if (decoded_mac_load && mac_wptr < 4'd9) begin
+                mac_buf[mac_wptr] <= rs_bus[0];     // push a pixel
+                mac_wptr <= mac_wptr + 4'd1;
             end else if (mac_fire) begin
-                mac_wptr <= 5'd0;                   // consumed -> ready for next conv
+                mac_wptr <= 4'd0;                   // consumed -> ready for next window
             end
         end
     end
+
+    // Baked 3x3 conv weights (signed int8), loaded at synthesis from the trained
+    // model. Override with -DCONV_W_HEX="..." in sim.
+`ifndef CONV_W_HEX
+    `define CONV_W_HEX "/Users/joseignacio/tiny-gpu-fpga/software/mnist_data/conv_weights.hex"
+`endif
+    reg signed [7:0] conv_w [0:8];
+    initial $readmemh(`CONV_W_HEX, conv_w);
 
     wire [7:0] mac_result;
     mac_array_3x3 u_mac (
@@ -218,9 +226,9 @@ module core #(
         .px00(mac_buf[0]), .px01(mac_buf[1]),  .px02(mac_buf[2]),
         .px10(mac_buf[3]), .px11(mac_buf[4]),  .px12(mac_buf[5]),
         .px20(mac_buf[6]), .px21(mac_buf[7]),  .px22(mac_buf[8]),
-        .w00(mac_buf[9]),  .w01(mac_buf[10]),  .w02(mac_buf[11]),
-        .w10(mac_buf[12]), .w11(mac_buf[13]),  .w12(mac_buf[14]),
-        .w20(mac_buf[15]), .w21(mac_buf[16]),  .w22(mac_buf[17]),
+        .w00(conv_w[0]),   .w01(conv_w[1]),    .w02(conv_w[2]),
+        .w10(conv_w[3]),   .w11(conv_w[4]),    .w12(conv_w[5]),
+        .w20(conv_w[6]),   .w21(conv_w[7]),    .w22(conv_w[8]),
         .pixel_out(mac_result),
         .valid_out()
     );

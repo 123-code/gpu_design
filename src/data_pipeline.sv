@@ -10,7 +10,7 @@
 // The read port (mem_raddr/mem_rdata) is exposed so the GPU's LSU (later) — and
 // the testbench (now) — can read back the loaded payload.
 module data_pipeline #(
-    parameter ADDR_BITS     = 12,         // 4096-byte main memory (2nd BRAM mapped)
+    parameter ADDR_BITS     = 13,         // 4096-byte main memory (2nd BRAM mapped)
     parameter PAYLOAD_BYTES = 793,        // overridden by top for the active kernel
     parameter CLK_FREQ      = 27000000,
     parameter BAUD_RATE     = 115200

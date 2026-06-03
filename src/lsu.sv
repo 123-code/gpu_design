@@ -2,7 +2,7 @@
 `timescale 1ns/1ns
 
 module lsu #(
-    parameter ADDR_BITS = 12
+    parameter ADDR_BITS = 13
 ) (
     input wire clk,
     input wire reset,

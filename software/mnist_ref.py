@@ -86,15 +86,35 @@ def main():
         for v in pooled:
             f.write(f"{v & 0xFF:02X}\n")
 
-    # dump the interleaved FC payload the on-chip FC kernel base-sweeps:
-    #   for digit d, for input i: [ feature[i], fc_weight[d*169+i] ]
-    # Features are repeated per digit because the LSU base pointer (ADDB) only
-    # moves forward, so the whole FC pass must be one monotonic sweep. 3380 bytes.
+    # dump the interleaved FC payload the (off-chip-fed) FC kernel base-sweeps.
     with open(os.path.join(DATA, f"fc_payload{idx}.hex"), "w") as f:
         for d in range(10):
             for i in range(169):
                 f.write(f"{pooled[i] & 0xFF:02X}\n")
                 f.write(f"{fcw[d*169 + i] & 0xFF:02X}\n")
+
+    # ---- artifacts for the FULL on-chip pipeline ----
+    def dump(name, vals):
+        with open(os.path.join(DATA, name), "w") as f:
+            for v in vals:
+                f.write(f"{v & 0xFF:02X}\n")
+
+    # conv 3x3 weights, baked into the MAC coprocessor's weight inputs
+    dump("conv_weights.hex", [weights[i] for i in range(9)])      # raw int8 bytes
+    # the input image (host streams this; sim preloads it at addr 0)
+    dump(f"image{idx}.hex", img)
+    # reference intermediate maps for staged sim verification
+    dump(f"conv_map{idx}.hex", [conv[y][x] for y in range(26) for x in range(26)])
+    dump(f"pool_map{idx}.hex", pooled)
+
+    # FC interleaved buffer INIT (image-independent): even slot = feature
+    # placeholder (the GPU scatter fills it), odd slot = baked FC weight.
+    # Baked into main_memory at the FC-buffer base; 3380 entries.
+    with open(os.path.join(DATA, "fc_buf_init.hex"), "w") as f:
+        for d in range(10):
+            for i in range(169):
+                f.write("00\n")                              # feature slot (GPU fills)
+                f.write(f"{fcw[d*169 + i] & 0xFF:02X}\n")    # weight slot (baked)
 
     tag = "" if label is None else f"  (label {label}, {'HIT' if label == pred else 'miss'})"
     print(f"image {idx}: predicted digit = {pred}{tag}")

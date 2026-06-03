@@ -15,10 +15,10 @@
 // pulses gpu_start (no power-on auto-run). Everything is on one 27 MHz clock.
 // ============================================================================
 module top #(
-    // MNIST FC-classifier payload (mnist_fc.asm): the host streams the
-    // interleaved (feature, weight) sweep -- 10 digits x 169 inputs x 2 bytes =
-    // 3380 bytes -- which the GPU base-sweeps through the FC-MAC coprocessor.
-    parameter PAYLOAD_BYTES = 3380,
+    // Full on-chip MNIST (mnist_full.asm): the host streams ONLY the 784-byte
+    // 28x28 image; all weights/biases are baked, and the GPU runs the whole
+    // Conv->Pool->Scatter->FC pipeline on-chip, emitting the predicted digit.
+    parameter PAYLOAD_BYTES = 784,
     parameter CLK_FREQ      = 27000000,  // for the UART bit timing (override in sim)
     parameter BAUD_RATE     = 115200
 ) (
@@ -35,16 +35,16 @@ module top #(
 
     // ---- Host-to-Device pipeline ----
     wire        gpu_start, loading;
-    wire [11:0] mem_raddr;            // driven by the GPU's LSU arbiter (4096-byte space)
+    wire [12:0] mem_raddr;            // driven by the GPU's LSU arbiter (4096-byte space)
     wire [7:0]  mem_rdata;
     wire        gpu_we;               // GPU write port (STR to data memory)
-    wire [11:0] gpu_waddr;
+    wire [12:0] gpu_waddr;
     wire [7:0]  gpu_wdata;
     wire        done;                 // GPU finished a run
     wire [7:0]  result;
 
     data_pipeline #(
-        .ADDR_BITS(12),
+        .ADDR_BITS(13),
         .PAYLOAD_BYTES(PAYLOAD_BYTES),
         .CLK_FREQ(CLK_FREQ),
         .BAUD_RATE(BAUD_RATE)
