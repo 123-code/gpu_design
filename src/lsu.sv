@@ -12,19 +12,25 @@ module lsu #(
     // Control Pins (From Decoder)
     input wire decoded_mem_read,         // 1 = LDR instruction
     input wire decoded_mem_write,        // 1 = STR instruction
-    input wire decoded_base_add,         // 1 = ADDB (base += immediate)
-    input wire [7:0] decoded_immediate,  // amount to add to base
+    input wire decoded_base_add,         // 1 = ADDB  (read base  += immediate)
+    input wire decoded_wbase_add,        // 1 = WBASE (write base += immediate)
+    input wire [7:0] decoded_immediate,  // amount to add to a base
 
     // Data Pins (From Registers)
     input wire [7:0] rs,                 // Memory offset (within the window/page)
     input wire [7:0] rt,                 // Data to save (for STR)
 
-    // Highway to Arbiter/FIFO
+    // Highway to Arbiter/FIFO (reads)
     output reg mem_valid,                // "I have a request!"
     output reg [ADDR_BITS-1:0] mem_addr,
     output reg [7:0] mem_write_data,
     input wire mem_ready,                // "Request complete!"
     input wire [7:0] mem_read_data,      // Payload from RAM
+
+    // Write port back to main memory (STR to a non-MMIO address). 1-cycle pulse.
+    output reg                  mem_we,
+    output reg [ADDR_BITS-1:0]  mem_waddr,
+    output reg [7:0]            mem_wdata,
 
     // Memory-mapped emit (STR to offset 63 -> UART TX). Handshake throttles the
     // GPU to UART speed: emit_valid holds until emit_ready, stalling the scheduler.
@@ -39,10 +45,12 @@ module lsu #(
 
     localparam MMIO_TX = 8'd63;          // reserved offset -> UART TX register
 
-    // Data-memory base pointer. Effective LDR address = base + rs. Moved in
-    // small steps with ADDB, so the kernel can stride a full image without ever
-    // loading a >6-bit constant.
-    reg [ADDR_BITS-1:0] base;
+    // Data-memory base pointers. LDR address = base + rs; STR address = wbase + rs.
+    // Two independent pointers let a kernel READ one region (e.g. the image) and
+    // WRITE another (e.g. the conv feature map) without reloading constants.
+    // Both move in small ADDB/WBASE steps (forward only).
+    reg [ADDR_BITS-1:0] base;    // read base  (ADDB)
+    reg [ADDR_BITS-1:0] wbase;   // write base (WBASE)
 
     always @(posedge clk) begin
         if (reset) begin
@@ -50,25 +58,35 @@ module lsu #(
             mem_valid <= 0;
             lsu_out <= 0;
             base <= '0;
+            wbase <= '0;
             emit_valid <= 0;
             emit_data <= 0;
+            mem_we <= 0;
+            mem_waddr <= '0;
+            mem_wdata <= 0;
         end else if (enable) begin
 
-            // ADDB: advance the base pointer in the UPDATE phase.
-            if (decoded_base_add && core_state == 3'b110)
-                base <= base + decoded_immediate;
+            // ADDB / WBASE: advance the read / write base in the UPDATE phase.
+            if (decoded_base_add  && core_state == 3'b110)
+                base  <= base  + decoded_immediate;
+            if (decoded_wbase_add && core_state == 3'b110)
+                wbase <= wbase + decoded_immediate;
 
-            // --- STR: store / memory-mapped emit ---
+            // --- STR: store to main memory / memory-mapped emit ---
+            mem_we <= 1'b0;                              // write strobe defaults low
             if (decoded_mem_write) begin
                 case (lsu_state)
                     2'b00: if (core_state == 3'b011) lsu_state <= 2'b01; // wake on REQUEST
                     2'b01: begin // decode the target
                         if (rs == MMIO_TX) begin
-                            emit_valid <= 1'b1;          // route data to UART TX
+                            emit_valid <= 1'b1;          // offset 63 -> UART TX
                             emit_data  <= rt;
                             lsu_state  <= 2'b10;         // wait for the byte to be accepted
                         end else begin
-                            lsu_state <= 2'b11;          // (non-MMIO store: no-op for now)
+                            mem_we    <= 1'b1;           // commit a BRAM write next cycle
+                            mem_waddr <= wbase + rs;     // write base + offset
+                            mem_wdata <= rt;
+                            lsu_state <= 2'b11;
                         end
                     end
                     2'b10: if (emit_ready) begin          // UART took the byte

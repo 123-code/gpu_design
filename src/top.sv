@@ -37,6 +37,9 @@ module top #(
     wire        gpu_start, loading;
     wire [11:0] mem_raddr;            // driven by the GPU's LSU arbiter (4096-byte space)
     wire [7:0]  mem_rdata;
+    wire        gpu_we;               // GPU write port (STR to data memory)
+    wire [11:0] gpu_waddr;
+    wire [7:0]  gpu_wdata;
     wire        done;                 // GPU finished a run
     wire [7:0]  result;
 
@@ -52,7 +55,10 @@ module top #(
         .gpu_start(gpu_start),
         .loading(loading),
         .mem_raddr(mem_raddr),
-        .mem_rdata(mem_rdata)
+        .mem_rdata(mem_rdata),
+        .gpu_we(gpu_we),
+        .gpu_waddr(gpu_waddr),
+        .gpu_wdata(gpu_wdata)
     );
 
     // ---- GPU run control: idle until a payload is ready ----
@@ -84,6 +90,9 @@ module top #(
         .operand_b(6'd0),
         .mem_raddr(mem_raddr),
         .mem_rdata(mem_rdata),
+        .mem_we(gpu_we),
+        .mem_waddr(gpu_waddr),
+        .mem_wdata(gpu_wdata),
         .emit_valid(emit_valid),
         .emit_data(emit_data),
         .emit_ready(emit_ready)

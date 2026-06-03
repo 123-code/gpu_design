@@ -24,9 +24,14 @@ module data_pipeline #(
     output wire                 gpu_start,    // 1-cycle "payload ready, go"
     output wire                 loading,      // high while the DMA owns memory
 
-    // GPU / testbench read port into main memory
+    // GPU read port into main memory
     input  wire [ADDR_BITS-1:0] mem_raddr,
-    output wire [7:0]           mem_rdata
+    output wire [7:0]           mem_rdata,
+
+    // GPU write port (active while running); muxed against the DMA writer below
+    input  wire                 gpu_we,
+    input  wire [ADDR_BITS-1:0] gpu_waddr,
+    input  wire [7:0]           gpu_wdata
 );
 
     // ---- UART receiver ----
@@ -56,12 +61,17 @@ module data_pipeline #(
         .loading(loading)
     );
 
+    // ---- Write-port owner: the DMA while loading, the GPU while running ----
+    wire                 mem_we    = loading ? dma_we    : gpu_we;
+    wire [ADDR_BITS-1:0] mem_waddr = loading ? dma_waddr : gpu_waddr;
+    wire [7:0]           mem_wdata = loading ? dma_wdata : gpu_wdata;
+
     // ---- Main data memory ----
     main_memory #(
         .ADDR_BITS(ADDR_BITS)
     ) u_mem (
         .clk(clk),
-        .we(dma_we), .waddr(dma_waddr), .wdata(dma_wdata),
+        .we(mem_we), .waddr(mem_waddr), .wdata(mem_wdata),
         .raddr(mem_raddr), .rdata(mem_rdata)
     );
 

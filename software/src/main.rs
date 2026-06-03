@@ -107,6 +107,9 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         // BRn target (8-bit, into [7:0]); condition = N flag in [11:9]
         "BRn" => vec![(0b1000 << 12) | (0b100 << 9) | (target(&toks[1]) & 0xff)],
         "ADDB" => vec![w(0b1001, 0, 0, imm(&toks[1]))],
+        // WBASE: advance the write base. ADDB opcode with instruction[11] set
+        // (rd field = 0b100) so the decoder routes it to wbase, no new opcode.
+        "WBASE" => vec![w(0b1001, 0b100, 0, imm(&toks[1]))],
         // STR Rdata,[Raddr]  ->  addr in [8:6], data in [2:0]
         "STR" => vec![w(0b1011, 0, reg(&toks[2]), reg(&toks[1]) & 7)],
         "RET" => vec![0xF000],

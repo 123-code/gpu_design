@@ -22,6 +22,11 @@ module core #(
     output wire [7:0]           emit_data,
     input  wire                 emit_ready,
 
+    // Data-memory WRITE port (thread 0's STR to a non-MMIO address -> main_memory)
+    output wire                 mem_we,
+    output wire [ADDR_BITS-1:0]  mem_waddr,
+    output wire [7:0]            mem_wdata,
+
     // ==========================================
     // NEW: THE MEMORY SPINE
     // ==========================================
@@ -59,6 +64,7 @@ module core #(
     wire decoded_ret;
     wire decoded_mac_load;
     wire decoded_base_add;
+    wire decoded_wbase_add;
     wire decoded_fc_clear;
     wire decoded_fc_mac;
     wire decoded_fc_arg;
@@ -91,6 +97,7 @@ module core #(
         .decoded_ret(decoded_ret),
         .decoded_mac_load(decoded_mac_load),
         .decoded_base_add(decoded_base_add),
+        .decoded_wbase_add(decoded_wbase_add),
         .decoded_fc_clear(decoded_fc_clear),
         .decoded_fc_mac(decoded_fc_mac),
         .decoded_fc_arg(decoded_fc_arg),
@@ -140,6 +147,15 @@ module core #(
     wire [7:0] lsu_emit_data [THREADS_PER_BLOCK-1:0];
     assign emit_valid = lsu_emit_valid[0];
     assign emit_data  = lsu_emit_data[0];
+
+    // Per-thread memory writes; only thread 0's reaches main memory (SIMT-uniform
+    // store model, like emit). Divergent per-thread writes would need an arbiter.
+    wire [THREADS_PER_BLOCK-1:0]  lsu_we;
+    wire [ADDR_BITS-1:0]          lsu_waddr [THREADS_PER_BLOCK-1:0];
+    wire [7:0]                    lsu_wdata [THREADS_PER_BLOCK-1:0];
+    assign mem_we    = lsu_we[0];
+    assign mem_waddr = lsu_waddr[0];
+    assign mem_wdata = lsu_wdata[0];
 
     // Pack the per-thread valid flags into a bus for the arbiter.
     wire [THREADS_PER_BLOCK-1:0] lsu_req;
@@ -284,6 +300,7 @@ module core #(
                 .decoded_mem_read(decoded_mem_read_enable),
                 .decoded_mem_write(decoded_mem_write_enable),
                 .decoded_base_add(decoded_base_add),
+                .decoded_wbase_add(decoded_wbase_add),
                 .decoded_immediate(decoded_immediate),
 
                 .rs(rs_bus[i]),
@@ -294,6 +311,10 @@ module core #(
                 .mem_write_data(lsu_mem_write_data[i]),
                 .mem_ready(arb_ready[i]),
                 .mem_read_data(arb_rdata[i]),
+
+                .mem_we(lsu_we[i]),
+                .mem_waddr(lsu_waddr[i]),
+                .mem_wdata(lsu_wdata[i]),
 
                 .emit_valid(lsu_emit_valid[i]),
                 .emit_data(lsu_emit_data[i]),

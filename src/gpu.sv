@@ -25,7 +25,12 @@ module gpu (
     // Core 0's memory-mapped emit (STR -> UART TX)
     output wire       emit_valid,
     output wire [7:0] emit_data,
-    input  wire       emit_ready
+    input  wire       emit_ready,
+
+    // Core 0's data-memory write port (STR to a non-MMIO address)
+    output wire        mem_we,
+    output wire [11:0] mem_waddr,
+    output wire [7:0]  mem_wdata
 );
 
     wire core_0_start, core_1_start;
@@ -94,7 +99,12 @@ module gpu (
         // Memory-mapped emit
         .emit_valid(emit_valid),
         .emit_data(emit_data),
-        .emit_ready(emit_ready)
+        .emit_ready(emit_ready),
+
+        // Data-memory write port
+        .mem_we(mem_we),
+        .mem_waddr(mem_waddr),
+        .mem_wdata(mem_wdata)
     );
 
     // (Compute Core 1 left disconnected from ROM for this specific simulation test)
@@ -112,7 +122,10 @@ module gpu (
         .mem_rdata(8'd0),
         .emit_valid(),
         .emit_data(),
-        .emit_ready(1'b0)
+        .emit_ready(1'b0),
+        .mem_we(),
+        .mem_waddr(),
+        .mem_wdata()
     );
 
 endmodule

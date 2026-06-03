@@ -37,8 +37,10 @@ module decoder (
     // MAC unit control: push an operand into the MAC buffer this instruction
     output reg decoded_mac_load,
 
-    // Address unit: add decoded_immediate to the LSU base pointer this instruction
+    // Address unit: add decoded_immediate to the LSU read base this instruction
     output reg decoded_base_add,
+    // ... or to the LSU write base (WBASE = ADDB with instruction[11] set)
+    output reg decoded_wbase_add,
 
     // FC-MAC coprocessor control (opcode 0000 sub-functions)
     output reg decoded_fc_clear,   // FRST : reset the FC engine (acc/digit/best)
@@ -97,6 +99,7 @@ module decoder (
             decoded_ret <= 0;
             decoded_mac_load <= 0;
             decoded_base_add <= 0;
+            decoded_wbase_add <= 0;
             decoded_fc_clear <= 0;
             decoded_fc_mac <= 0;
             decoded_fc_arg <= 0;
@@ -132,6 +135,7 @@ module decoder (
                 decoded_ret <= 0;
                 decoded_mac_load <= 0;
                 decoded_base_add <= 0;
+            decoded_wbase_add <= 0;
                 decoded_fc_clear <= 0;
                 decoded_fc_mac <= 0;
                 decoded_fc_arg <= 0;
@@ -202,8 +206,11 @@ module decoder (
                         decoded_immediate <= instruction[7:0];
                     end
                     ADDB: begin
-                        // Advance the data-memory base pointer by the immediate.
-                        decoded_base_add <= 1;
+                        // Advance a data-memory base pointer by the immediate.
+                        // instruction[11] picks which: 0 = read base (ADDB),
+                        // 1 = write base (WBASE).
+                        if (instruction[11]) decoded_wbase_add <= 1;
+                        else                 decoded_base_add  <= 1;
                     end
                     STR: begin
                         // Store/emit: the LSU writes rt to the address in rs
