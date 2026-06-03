@@ -61,6 +61,7 @@ module core #(
     wire decoded_base_add;
     wire decoded_fc_clear;
     wire decoded_fc_mac;
+    wire decoded_fc_arg;
     wire decoded_fc_read;
 
     // ==========================================
@@ -92,6 +93,7 @@ module core #(
         .decoded_base_add(decoded_base_add),
         .decoded_fc_clear(decoded_fc_clear),
         .decoded_fc_mac(decoded_fc_mac),
+        .decoded_fc_arg(decoded_fc_arg),
         .decoded_fc_read(decoded_fc_read)
     );
 
@@ -217,8 +219,9 @@ module core #(
     fc_mac u_fc (
         .clk(clk),
         .reset(reset),
-        .clear (decoded_fc_clear && (core_state == UPDATE_STATE)),
+        .frst  (decoded_fc_clear && (core_state == UPDATE_STATE)),
         .mac_en(decoded_fc_mac   && (core_state == UPDATE_STATE)),
+        .farg  (decoded_fc_arg   && (core_state == UPDATE_STATE)),
         .px(rs_bus[0]),
         .wt(rt_bus[0]),
         .result(fc_result)

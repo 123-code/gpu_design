@@ -41,9 +41,10 @@ module decoder (
     output reg decoded_base_add,
 
     // FC-MAC coprocessor control (opcode 0000 sub-functions)
-    output reg decoded_fc_clear,   // FCLR: acc <- 0
-    output reg decoded_fc_mac,     // FMAC: acc += rs*rt
-    output reg decoded_fc_read     // FRD : rd <- sat(acc>>Q) (uses the MAC writeback mux)
+    output reg decoded_fc_clear,   // FRST : reset the FC engine (acc/digit/best)
+    output reg decoded_fc_mac,     // FMAC : acc += rs*rt
+    output reg decoded_fc_arg,     // FARG : finalize current digit (add bias, argmax)
+    output reg decoded_fc_read     // FBEST: rd <- best_idx (uses the MAC writeback mux)
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -98,6 +99,7 @@ module decoder (
             decoded_base_add <= 0;
             decoded_fc_clear <= 0;
             decoded_fc_mac <= 0;
+            decoded_fc_arg <= 0;
             decoded_fc_read <= 0;
 
         end else begin
@@ -139,18 +141,19 @@ module decoder (
                 case (instruction[15:12])
                     FCU: begin
                         // FC-MAC coprocessor. Sub-function in instruction[5:4]:
-                        //   00 FCLR  -> clear acc
-                        //   01 FMAC  -> acc += rs*rt   (rs=[8:6], rt=[2:0])
-                        //   10 FRD   -> rd <- sat(acc>>Q) via the MAC writeback mux
+                        //   00 FRST  -> reset the FC engine
+                        //   01 FMAC  -> acc += rs*rt          (rs=[8:6], rt=[2:0])
+                        //   10 FARG  -> finalize digit (add bias, argmax)
+                        //   11 FBEST -> rd <- best_idx via the MAC writeback mux
                         case (instruction[5:4])
                             2'b00: decoded_fc_clear <= 1;
                             2'b01: decoded_fc_mac   <= 1;
-                            2'b10: begin
+                            2'b10: decoded_fc_arg   <= 1;
+                            2'b11: begin
                                 decoded_reg_write_enable <= 1;
                                 decoded_reg_input_mux    <= MUX_MAC;
                                 decoded_fc_read          <= 1;
                             end
-                            default: ; // reserved
                         endcase
                     end
                     ADD: begin

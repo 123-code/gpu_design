@@ -111,10 +111,11 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "STR" => vec![w(0b1011, 0, reg(&toks[2]), reg(&toks[1]) & 7)],
         "RET" => vec![0xF000],
 
-        // ---- FC-MAC coprocessor (opcode 0000, sub-fn in [5:4]) ----
-        "FCLR" => vec![0x0000],                                   // [5:4]=00
-        "FMAC" => vec![w(0b0000, 0, reg(&toks[1]), 0b010_000 | (reg(&toks[2]) & 7))], // [5:4]=01, rt in [2:0]
-        "FRD" => vec![w(0b0000, reg(&toks[1]), 0, 0b100_000)],    // [5:4]=10, rd in [11:9]
+        // ---- FC-MAC + argmax coprocessor (opcode 0000, sub-fn in [5:4]) ----
+        "FRST" => vec![0x0000],                                   // [5:4]=00 reset engine
+        "FMAC" => vec![w(0b0000, 0, reg(&toks[1]), 0b010_000 | (reg(&toks[2]) & 7))], // [5:4]=01
+        "FARG" => vec![w(0b0000, 0, 0, 0b100_000)],               // [5:4]=10 finalize digit
+        "FBEST" => vec![w(0b0000, reg(&toks[1]), 0, 0b110_000)],  // [5:4]=11 rd <- best_idx
 
         // ---- MAX Rd,Ra,Rb  (pseudo): Rd = max(Ra,Rb) ----
         // ADDI Rd,Ra,#0 ; CMP Rb,Ra ; BRn skip ; ADDI Rd,Rb,#0 ; skip:

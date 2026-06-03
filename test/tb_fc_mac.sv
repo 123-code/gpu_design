@@ -1,62 +1,53 @@
 `timescale 1ns/1ns
-// Directed test for the FC-MAC coprocessor: FCLR -> FMAC* -> FRD readout.
+// End-to-end check of the FC-MAC + argmax coprocessor against the Python
+// reference (software/mnist_ref.py). Replays image 0's FC layer with the REAL
+// trained weights/biases + the reference's 169 pooled features, then asserts the
+// predicted digit == 7 (image 0's label, which the reference model also hits).
 module tb_fc_mac;
-    reg        clk = 0, reset = 1, clear = 0, mac_en = 0;
+    localparam D = "/Users/joseignacio/tiny-gpu-fpga/software/mnist_data";
+
+    reg        clk = 0, reset = 1, frst = 0, mac_en = 0, farg = 0;
     reg  [7:0] px = 0, wt = 0;
     wire [7:0] result;
 
-    fc_mac #(.Q(6)) dut (
+    fc_mac #(.BIAS_HEX({D, "/bias.hex"})) dut (
         .clk(clk), .reset(reset),
-        .clear(clear), .mac_en(mac_en),
+        .frst(frst), .mac_en(mac_en), .farg(farg),
         .px(px), .wt(wt), .result(result)
     );
 
     always #5 clk = ~clk;
 
-    // Drive one FMAC: present operands, pulse mac_en for a single posedge.
-    task fmac(input [7:0] p, input signed [7:0] w);
-        begin
-            @(negedge clk); px = p; wt = w; mac_en = 1;
-            @(negedge clk); mac_en = 0;
-        end
-    endtask
+    reg  [7:0] feats [0:168];     // 169 pooled features (from mnist_ref.py)
+    reg  [7:0] allw  [0:1698];    // weights.hex: 0..8 conv, 9..1698 FC
+    integer d, i, exp_digit;
+    reg [1023:0] feat_path;
 
-    integer errors = 0;
-    task check(input signed [7:0] got, input signed [7:0] exp, input [127:0] name);
-        begin
-            if (got !== exp) begin
-                $display("FAIL %0s: got %0d, expected %0d", name, got, exp);
-                errors = errors + 1;
-            end else
-                $display("ok   %0s = %0d", name, got);
-        end
+    task fmac(input [7:0] p, input [7:0] w);
+        begin @(negedge clk); px = p; wt = w; mac_en = 1; @(negedge clk); mac_en = 0; end
     endtask
 
     initial begin
+        // +FEAT=<path> selects the pooled-feature file; +EXP=<d> the reference digit.
+        if (!$value$plusargs("FEAT=%s", feat_path)) feat_path = {D, "/features0.hex"};
+        if (!$value$plusargs("EXP=%d", exp_digit))   exp_digit = 7;
+        $readmemh(feat_path, feats);
+        $readmemh({D, "/weights.hex"}, allw);
+
         @(negedge clk); reset = 0;
+        @(negedge clk); frst = 1; @(negedge clk); frst = 0;   // start FC pass
 
-        // Test 1: 10*2 + 20*(-1) + 30*3 = 90 ; 90 >> 6 = 1
-        @(negedge clk); clear = 1; @(negedge clk); clear = 0;
-        fmac(8'd10,  8'sd2);
-        fmac(8'd20, -8'sd1);
-        fmac(8'd30,  8'sd3);
-        check($signed(result), 8'sd1, "dotprod 90>>6");
+        for (d = 0; d < 10; d = d + 1) begin
+            for (i = 0; i < 169; i = i + 1)
+                fmac(feats[i], allw[9 + d*169 + i]);          // acc += feat*weight
+            @(negedge clk); farg = 1; @(negedge clk); farg = 0; // finalize digit d
+        end
 
-        // Test 2: clear resets the accumulator
-        @(negedge clk); clear = 1; @(negedge clk); clear = 0;
-        check($signed(result), 8'sd0, "after FCLR");
-
-        // Test 3: positive saturation. 255*127 = 32385 ; >>6 = 506 -> clamp 127
-        fmac(8'd255, 8'sd127);
-        check($signed(result), 8'sd127, "pos saturate");
-
-        // Test 4: negative saturation. add 255*(-128) -> large negative -> clamp -128
-        fmac(8'd255, -8'sd128);
-        fmac(8'd255, -8'sd128);
-        check($signed(result), -8'sd128, "neg saturate");
-
-        if (errors == 0) $display("RESULT: PASS - FC-MAC coprocessor correct");
-        else             $display("RESULT: FAIL - %0d error(s)", errors);
+        @(posedge clk);
+        if (result === exp_digit[7:0])
+            $display("RESULT: PASS - predicted %0d == reference %0d", result, exp_digit);
+        else
+            $display("RESULT: FAIL - predicted %0d, reference %0d", result, exp_digit);
         $finish;
     end
 endmodule

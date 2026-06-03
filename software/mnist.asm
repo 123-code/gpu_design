@@ -22,8 +22,10 @@
 ;   * Only BRn exists, so conditionals are written as "invert compare + skip".
 ;   * Region base addresses are reached by walking the LSU base pointer with ADDB
 ;     (#<=63 per step); shown compactly and marked [base].
-;   * Pooling/argmax use the MAX pseudo-op (CMP+BRn+ADDI); FC uses the wide
-;     FC-MAC coprocessor (FCLR/FMAC/FRD) so 169 signed products don't overflow 8b.
+;   * Pooling uses the MAX pseudo-op (CMP+BRn+ADDI). The FC layer + argmax run on
+;     the wide FC-MAC coprocessor (FRST/FMAC/FARG/FBEST): FMAC accumulates 169
+;     signed products in 32 bits, FARG adds the int32 bias and tracks the best
+;     digit, FBEST reads back the prediction -- exactly like cnn_chip's fc_layer.
 ; This draft ASSEMBLES and shows the full loop architecture; [base]/weight-
 ; preload/bias steps are marked where a final build fills in exact addressing.
 ; ============================================================================
@@ -96,14 +98,15 @@ POOL_COL:
         BRn   POOL_ROW
 
 ; ----------------------------------------------------------------------------
-; PHASE 3 - FULLY CONNECTED  (169 pooled inputs x 10 classes)
-;   R2 col | R3 class | R4 pixel | R5 weight | R6 row->score | R7 limit
-;   Wide FC-MAC accumulator keeps the 169-term signed sum off the 8-bit datapath.
+; PHASE 3+4 - FULLY CONNECTED + ARGMAX  (169 inputs x 10 classes -> digit)
+;   R2 col | R3 class | R4 pixel | R5 weight | R6 row | R7 limit
+;   The FC-MAC coprocessor owns the 32-bit accumulate, the int32 bias add, and
+;   the argmax, so no 8-bit score storage / software argmax is needed.
 ; ----------------------------------------------------------------------------
 FC:
+        FRST                         ; reset FC engine: acc=0, digit=0, best=-inf
         MOV   R3, #0                 ; class counter (0..9)
 FC_CLASS:
-        FCLR                         ; acc = 0 for this digit
         MOV   R7, #13                ; 13 x 13 = 169 inner iterations
         MOV   R6, #0                 ; inner row
 FC_ROW:
@@ -123,10 +126,7 @@ FC_COL:
         CMP   R6, R7
         BRn   FC_ROW
 
-        FRD   R6                     ; R6 = saturate(acc >> Q) (requantized score)
-        ; ... (add this class's bias from addr 2483+R3) ...
-        MOV   R1, #0
-        STR   R6, [R1]               ; SCORES[class] = R6
+        FARG                         ; score = acc + bias[class]; argmax; digit++; acc=0
 
         ADDI  R3, R3, #1
         MOV   R7, #10
@@ -134,26 +134,9 @@ FC_COL:
         BRn   FC_CLASS               ; next class while class < 10
 
 ; ----------------------------------------------------------------------------
-; PHASE 4 - ARGMAX + EMIT  (scan 10 scores, emit the winning digit on [63])
-;   R2 ctr | R3 best idx | R4 best val | R5 score | R7 limit(10)
+; EMIT - read back the predicted digit and send it on [63]
 ; ----------------------------------------------------------------------------
-ARGMAX:
-        MOV   R4, #0                 ; best score so far
-        MOV   R3, #0                 ; best index (predicted digit)
-        MOV   R2, #0                 ; scan counter
-        MOV   R7, #10
-ARG_LOOP:
-        MOV   R1, #0
-        LDR   R5, [R1]               ; SCORES[R2]
-        CMP   R5, R4                 ; N set if score < best -> keep current best
-        BRn   ARG_KEEP               ; (only BRn exists: invert compare + skip adopt)
-        ADD   R3, R2, #0             ; score >= best: best index = current class
-        ADD   R4, R5, #0             ; best value = this score
-ARG_KEEP:
-        ADDI  R2, R2, #1
-        CMP   R2, R7
-        BRn   ARG_LOOP
-
+        FBEST R3                     ; R3 = predicted digit (argmax winner)
         MOV   R1, #63
         STR   R3, [R1]               ; EMIT predicted digit over UART
         RET
