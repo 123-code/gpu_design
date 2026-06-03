@@ -9,8 +9,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FS="impl/pnr/tiny_gpu.fs"
-[ -f "$FS" ] || { echo "No bitstream at $FS — run ./build_fpga.sh first."; exit 1; }
+# Bitstream to flash. The canonical artifact is produced by the Gowin IDE
+# project in the app bundle; override with `FS=/path/to.fs ./flash.sh` if needed.
+GOWIN_GPU="/Applications/GowinIDE.app/Contents/Resources/Gowin_EDA/IDE/bin/gpu"
+FS="${FS:-$GOWIN_GPU/impl/pnr/gpu_uart.fs}"
+[ -f "$FS" ] || FS="impl/pnr/tiny_gpu.fs"   # fall back to a local headless build
+[ -f "$FS" ] || { echo "No bitstream found (looked in the Gowin project and impl/pnr/). Build first."; exit 1; }
+echo ">> Flashing: $FS"
 
 MODE="${1:-sram}"
 

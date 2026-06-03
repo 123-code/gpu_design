@@ -8,7 +8,7 @@ VVP      ?= vvp
 .PHONY: sim build flash flash-persist asm clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
-	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv
+	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
 	$(VVP) gpu_sim
 
 asm:            ## Re-assemble software/test_kernel.asm -> software/kernel.hex

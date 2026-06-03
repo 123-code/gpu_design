@@ -1,177 +1,197 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 
-/// Helper: Converts a string like "R3" into a 3-bit binary string "011"
-fn reg_to_bin(reg_str: &str) -> String {
-    let num: u8 = reg_str.replace("R", "").parse().unwrap_or(0);
-    format!("{:03b}", num)
-}
+// ============================================================================
+// tiny-gpu assembler (two-pass).
+//
+// 16-bit encoding:  [15:12] opcode  [11:9] rd  [8:6] rs  [5:0] imm / [2:0] rt
+//
+// Pass 1 assigns an address to every emitted instruction word and records
+// labels (`name:`). Pass 2 encodes each line, resolving label references in
+// BRn. Pseudo-ops (MAX) expand to several words. Comments start with // or ;.
+// ============================================================================
 
-/// Helper: Converts a string like "#5" or "4" into an N-bit binary string
-fn imm_to_bin(imm_str: &str, bits: usize) -> String {
-    let num: u8 = imm_str.replace("#", "").parse().unwrap_or(0);
-    format!("{:0width$b}", num, width = bits)
-}
-
-/// The core compilation engine
-fn assemble_line(line: &str) -> Option<String> {
-    // Clean the line: remove comments and trim whitespace
-    let clean_line = line.split("//").next().unwrap_or("").trim();
-    if clean_line.is_empty() {
-        return None;
+fn reg(s: &str) -> u16 {
+    let n = s
+        .trim()
+        .trim_matches(|c| c == '[' || c == ']')
+        .trim_start_matches('R')
+        .parse()
+        .unwrap_or(0);
+    // Instruction register fields are 3-bit: only R0..R7 are addressable.
+    // (R13..R15 are SIMT identity regs, unreachable by the encoding.)
+    if n > 7 {
+        eprintln!("ERROR: R{} is not addressable — instructions can only use R0..R7", n);
+        std::process::exit(1);
     }
+    n
+}
 
-    let replaced = clean_line.replace(",", "");
-    let parts: Vec<&str> = replaced.split_whitespace().collect();
-    let instruction = parts[0];
+fn imm(s: &str) -> u16 {
+    let t = s.trim().trim_start_matches('#');
+    if let Some(h) = t.strip_prefix("0x") {
+        u16::from_str_radix(h, 16).unwrap_or(0)
+    } else {
+        t.parse().unwrap_or(0)
+    }
+}
 
-    // Build the 16-bit binary string
-    let mut binary_out = String::new();
+// Strip comments (// or ;) and surrounding whitespace.
+fn clean(line: &str) -> String {
+    let no_slash = line.split("//").next().unwrap_or("");
+    let no_semi = no_slash.split(';').next().unwrap_or("");
+    no_semi.trim().to_string()
+}
 
-    match instruction {
-        // ADD (0001) with a register src2, or ADDI (0101) with an immediate src2.
-        // These MUST be distinct opcodes: the hardware has no other way to know
-        // whether [5:0] is a register index or an immediate value.
+// Split a cleaned line into an optional label and the remaining tokens.
+fn split_label(line: &str) -> (Option<String>, Vec<String>) {
+    let mut label = None;
+    let mut rest = line.to_string();
+    if let Some(idx) = line.find(':') {
+        label = Some(line[..idx].trim().to_string());
+        rest = line[idx + 1..].trim().to_string();
+    }
+    let toks: Vec<String> = rest
+        .replace(',', " ")
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    (label, toks)
+}
+
+// How many machine words does this instruction expand to?
+fn word_count(mnemonic: &str) -> u16 {
+    match mnemonic {
+        "MAX" => 4, // pseudo-op: ADDI / CMP / BRn / ADDI
+        _ => 1,
+    }
+}
+
+// Field assembly helper.
+fn w(op: u16, rd: u16, rs: u16, low6: u16) -> u16 {
+    (op << 12) | ((rd & 7) << 9) | ((rs & 7) << 6) | (low6 & 0x3f)
+}
+
+// Encode one source instruction into its machine word(s). `pc` is this line's
+// address (needed for the MAX pseudo-op's internal branch); `labels` resolves
+// BRn targets.
+fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
+    let m = toks[0].as_str();
+    let target = |s: &str| -> u16 {
+        if let Some(&a) = labels.get(s) {
+            a
+        } else {
+            imm(s)
+        }
+    };
+    match m {
+        // ADD Rd,Rs,Rt  (0001)  |  ADD Rd,Rs,#imm -> ADDI (0101)
         "ADD" => {
-            let dest = reg_to_bin(parts[1]);
-            let src1 = reg_to_bin(parts[2]);
-
-            // Check if the 3rd argument is an immediate number (#1) or a register (R4)
-            let (opcode, src2_imm) = if parts[3].starts_with('#') {
-                ("0101", imm_to_bin(parts[3], 6))            // ADDI: rs + immediate
+            if toks[3].starts_with('#') {
+                vec![w(0b0101, reg(&toks[1]), reg(&toks[2]), imm(&toks[3]))]
             } else {
-                ("0001", format!("000{}", reg_to_bin(parts[3]))) // ADD: rs + rt
-            };
+                vec![w(0b0001, reg(&toks[1]), reg(&toks[2]), reg(&toks[3]))]
+            }
+        }
+        "ADDI" => vec![w(0b0101, reg(&toks[1]), reg(&toks[2]), imm(&toks[3]))],
+        "MUL" => vec![w(0b1010, reg(&toks[1]), reg(&toks[2]), reg(&toks[3]))],
+        "SHR" => vec![w(0b1100, reg(&toks[1]), reg(&toks[2]), reg(&toks[3]))],
+        "SHL" => vec![w(0b1101, reg(&toks[1]), reg(&toks[2]), reg(&toks[3]))],
+        "SUB" => vec![w(0b1110, reg(&toks[1]), reg(&toks[2]), reg(&toks[3]))],
+        "MOV" => vec![w(0b0010, reg(&toks[1]), 0, imm(&toks[2]))],
+        "CMP" => vec![w(0b0011, 0, reg(&toks[1]), reg(&toks[2]))],
+        "LDR" => vec![w(0b0100, reg(&toks[1]), reg(&toks[2]), 0)],
+        "MACL" => vec![w(0b0110, 0, reg(&toks[1]), 0)],
+        "MAC" => vec![w(0b0111, reg(&toks[1]), 0, 0)],
+        // BRn target (8-bit, into [7:0]); condition = N flag in [11:9]
+        "BRn" => vec![(0b1000 << 12) | (0b100 << 9) | (target(&toks[1]) & 0xff)],
+        "ADDB" => vec![w(0b1001, 0, 0, imm(&toks[1]))],
+        // STR Rdata,[Raddr]  ->  addr in [8:6], data in [2:0]
+        "STR" => vec![w(0b1011, 0, reg(&toks[2]), reg(&toks[1]) & 7)],
+        "RET" => vec![0xF000],
 
-            binary_out.push_str(&format!("{}{}{}{}", opcode, dest, src1, src2_imm));
+        // ---- FC-MAC coprocessor (opcode 0000, sub-fn in [5:4]) ----
+        "FCLR" => vec![0x0000],                                   // [5:4]=00
+        "FMAC" => vec![w(0b0000, 0, reg(&toks[1]), 0b010_000 | (reg(&toks[2]) & 7))], // [5:4]=01, rt in [2:0]
+        "FRD" => vec![w(0b0000, reg(&toks[1]), 0, 0b100_000)],    // [5:4]=10, rd in [11:9]
+
+        // ---- MAX Rd,Ra,Rb  (pseudo): Rd = max(Ra,Rb) ----
+        // ADDI Rd,Ra,#0 ; CMP Rb,Ra ; BRn skip ; ADDI Rd,Rb,#0 ; skip:
+        "MAX" => {
+            let (rd, ra, rb) = (reg(&toks[1]), reg(&toks[2]), reg(&toks[3]));
+            let skip = pc + 4;
+            vec![
+                w(0b0101, rd, ra, 0),                       // Rd = Ra + 0
+                w(0b0011, 0, rb, ra),                       // CMP Rb,Ra  (N if Rb<Ra)
+                (0b1000 << 12) | (0b100 << 9) | (skip & 0xff), // BRn skip (Ra is max)
+                w(0b0101, rd, rb, 0),                       // Rd = Rb + 0
+            ]
         }
 
-        // General ALU ops:  OP Rd, Rs, Rt   (rd = rs op rt)
-        "MUL" | "SUB" | "SHR" | "SHL" => {
-            let opcode = match instruction {
-                "MUL" => "1010", "SHR" => "1100", "SHL" => "1101", "SUB" => "1110",
-                _ => unreachable!(),
-            };
-            let dest = reg_to_bin(parts[1]);
-            let src1 = reg_to_bin(parts[2]);
-            let src2 = reg_to_bin(parts[3]);
-            binary_out.push_str(&format!("{}{}{}{}{}", opcode, dest, src1, "000", src2));
-        }
-
-        // Opcode: 0010
-        "MOV" => {
-            let opcode = "0010";
-            let dest = reg_to_bin(parts[1]);
-            let src1 = "000"; // MOV doesn't use a source 1 register
-            let imm = imm_to_bin(parts[2], 6);
-            
-            binary_out.push_str(&format!("{}{}{}{}", opcode, dest, src1, imm));
-        }
-
-        // Opcode: 0011
-        "CMP" => {
-            let opcode = "0011";
-            let dest = "000"; // Compare doesn't save to a destination vault
-            let src1 = reg_to_bin(parts[1]);
-            let src2 = format!("000{}", reg_to_bin(parts[2]));
-            
-            binary_out.push_str(&format!("{}{}{}{}", opcode, dest, src1, src2));
-        }
-
-        // Opcode: 0100
-        "LDR" => {
-            let opcode = "0100";
-            let dest = reg_to_bin(parts[1]);
-            let src1 = reg_to_bin(parts[2].trim_matches(|c| c == '[' || c == ']'));
-            let imm = "000000"; // Assuming 0 offset for now
-            
-            binary_out.push_str(&format!("{}{}{}{}", opcode, dest, src1, imm));
-        }
-
-        // Opcode: 0110 (MAC load: push a register into the MAC operand buffer)
-        "MACL" => {
-            let opcode = "0110";
-            let src1 = reg_to_bin(parts[1]); // register to push -> [8:6]
-            binary_out.push_str(&format!("{}{}{}{}", opcode, "000", src1, "000000"));
-        }
-
-        // Opcode: 0111 (MAC fire: write the 3x3 MAC result into rd)
-        "MAC" => {
-            let opcode = "0111";
-            let dest = reg_to_bin(parts[1]); // result register -> [11:9]
-            binary_out.push_str(&format!("{}{}{}{}", opcode, dest, "000", "000000"));
-        }
-
-        // Opcode: 1000 (Branch if Negative)
-        "BRn" => {
-            let opcode = "1000";
-            let condition = "100"; // Negative flag position
-            let empty = "000";
-            let target = imm_to_bin(parts[1], 6);
-            
-            binary_out.push_str(&format!("{}{}{}{}", opcode, condition, empty, target));
-        }
-
-        // Opcode: 1011 (STR Rdata, [Raddr]: store/emit; addr 63 -> UART TX)
-        "STR" => {
-            let opcode = "1011";
-            let data = reg_to_bin(parts[1]);                                  // [2:0]
-            let addr = reg_to_bin(parts[2].trim_matches(|c| c == '[' || c == ']')); // [8:6]
-            binary_out.push_str(&format!("{}{}{}{}{}", opcode, "000", addr, "000", data));
-        }
-
-        // Opcode: 1001 (ADDB #imm: advance the data-memory base pointer)
-        "ADDB" => {
-            let opcode = "1001";
-            let imm = imm_to_bin(parts[1], 6);
-            binary_out.push_str(&format!("{}{}{}{}", opcode, "000", "000", imm));
-        }
-
-        // Opcode: 1111
-        "RET" => {
-            binary_out.push_str("1111000000000000");
-        }
-
-        _ => {
-            eprintln!("Unknown instruction: {}", instruction);
-            return None;
+        other => {
+            eprintln!("Unknown instruction: {}", other);
+            vec![]
         }
     }
-
-    // Convert the 16-bit binary string into a 4-digit Hexadecimal string
-    let int_val = u16::from_str_radix(&binary_out, 2).unwrap_or(0);
-    Some(format!("{:04X}", int_val))
 }
 
 fn main() -> io::Result<()> {
-    // Usage: assembler [input.asm] [output.hex]  (defaults preserve old behavior)
     let args: Vec<String> = std::env::args().collect();
-    let in_path  = args.get(1).map(String::as_str).unwrap_or("test_kernel.asm");
+    let in_path = args.get(1).map(String::as_str).unwrap_or("test_kernel.asm");
     let out_path = args.get(2).map(String::as_str).unwrap_or("kernel.hex");
 
-    let input_file = File::open(in_path)?;
-    let reader = BufReader::new(input_file);
+    let reader = BufReader::new(File::open(in_path)?);
+    let raw: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
 
-    let mut output_file = File::create(out_path)?;
+    // Parse into (label, tokens) per non-empty line.
+    let mut parsed: Vec<(Option<String>, Vec<String>)> = Vec::new();
+    for line in &raw {
+        let c = clean(line);
+        if c.is_empty() {
+            continue;
+        }
+        let (label, toks) = split_label(&c);
+        // Skip lines that are only a label with no instruction (still record label).
+        parsed.push((label, toks));
+    }
 
-    println!("{:<20} | {:<18} | {:<4}", "Assembly", "Binary", "Hex");
-    println!("{:-<50}", "");
-
-    for line in reader.lines() {
-        let line = line?;
-        if let Some(hex_code) = assemble_line(&line) {
-            
-            // Print to terminal for verification
-            let clean_line = line.split("//").next().unwrap_or("").trim();
-            let bin_display = format!("{:016b}", u16::from_str_radix(&hex_code, 16).unwrap());
-            println!("{:<20} | {} | {}", clean_line, bin_display, hex_code);
-            
-            // Write strictly the hex data to the output file
-            writeln!(output_file, "{}", hex_code)?;
+    // Pass 1: assign addresses + collect labels.
+    let mut labels: HashMap<String, u16> = HashMap::new();
+    let mut pc: u16 = 0;
+    for (label, toks) in &parsed {
+        if let Some(l) = label {
+            if !l.is_empty() {
+                labels.insert(l.clone(), pc);
+            }
+        }
+        if !toks.is_empty() {
+            pc += word_count(&toks[0]);
         }
     }
 
-    println!("{:-<50}", "");
-    println!("Compilation successful! Wrote to {}", out_path);
+    // Pass 2: encode.
+    let mut out = File::create(out_path)?;
+    println!("{:<24} | {:<16} | {}", "Assembly", "Binary", "Hex");
+    println!("{:-<52}", "");
+    let mut pc: u16 = 0;
+    for (_label, toks) in &parsed {
+        if toks.is_empty() {
+            continue;
+        }
+        let words = encode(toks, pc, &labels);
+        for word in words {
+            writeln!(out, "{:04X}", word)?;
+            println!(
+                "{:<24} | {:016b} | {:04X}",
+                toks.join(" "),
+                word,
+                word
+            );
+            pc += 1;
+        }
+    }
+    println!("{:-<52}", "");
+    println!("Wrote {} ({} words) to {}", in_path, pc, out_path);
     Ok(())
 }

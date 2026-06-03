@@ -6,7 +6,9 @@
 // one synchronous read port (driven by a thread's LSU). Gowin infers this as
 // a semi-dual-port BSRAM. 1-cycle read latency.
 module main_memory #(
-    parameter ADDR_BITS = 10,            // 1024 bytes (fits a 28x28 image + weights)
+    parameter ADDR_BITS = 12,            // 4096 bytes: image + conv/FC weights +
+                                         // GPU-computed conv/pool/score scratch.
+                                         // Maps to ~2-4 BSRAM blocks (of 46).
     parameter DEPTH     = (1 << ADDR_BITS)
 ) (
     input  wire                 clk,

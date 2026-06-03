@@ -7,19 +7,25 @@
 # Tang Nano 20K = GW2AR-18 in the QN88 package, speed grade C8/I7
 set_device GW2AR-LV18QN88C8/I7
 
-# ---- RTL sources (everything in src/ except this is the synthesis set) ----
+# ---- RTL sources (full set the host-driven top.sv pulls in) ----
 add_file src/alu.sv
 add_file src/decoder.sv
 add_file src/registers.sv
 add_file src/pc.sv
 add_file src/lsu.sv
+add_file src/lsu_arbiter.sv
 add_file src/scheduler.sv
-add_file src/mem_controller.sv
-add_file src/memory_fifo.sv
 add_file src/program_memory.sv
+add_file src/mac_array_3x3.v
+add_file src/fc_mac.sv
 add_file src/core.sv
 add_file src/dispatcher.sv
 add_file src/gpu.sv
+add_file src/main_memory.sv
+add_file src/dma_controller.sv
+add_file src/uart_rx.sv
+add_file src/uart_tx.sv
+add_file src/data_pipeline.sv
 add_file src/top.sv
 
 # ---- Physical + timing constraints ----

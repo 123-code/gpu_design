@@ -38,10 +38,16 @@ module decoder (
     output reg decoded_mac_load,
 
     // Address unit: add decoded_immediate to the LSU base pointer this instruction
-    output reg decoded_base_add
+    output reg decoded_base_add,
+
+    // FC-MAC coprocessor control (opcode 0000 sub-functions)
+    output reg decoded_fc_clear,   // FCLR: acc <- 0
+    output reg decoded_fc_mac,     // FMAC: acc += rs*rt
+    output reg decoded_fc_read     // FRD : rd <- sat(acc>>Q) (uses the MAC writeback mux)
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
+    localparam FCU  = 4'b0000; // FC-MAC coprocessor; sub-function in instruction[5:4]
     localparam ADD  = 4'b0001;
     localparam MOV  = 4'b0010;
     localparam CMP  = 4'b0011;
@@ -90,6 +96,9 @@ module decoder (
             decoded_ret <= 0;
             decoded_mac_load <= 0;
             decoded_base_add <= 0;
+            decoded_fc_clear <= 0;
+            decoded_fc_mac <= 0;
+            decoded_fc_read <= 0;
 
         end else begin
             // Only trigger the logic machinery if the 3 core_state wires read '010' (State 2)
@@ -121,10 +130,29 @@ module decoder (
                 decoded_ret <= 0;
                 decoded_mac_load <= 0;
                 decoded_base_add <= 0;
+                decoded_fc_clear <= 0;
+                decoded_fc_mac <= 0;
+                decoded_fc_read <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
                 case (instruction[15:12])
+                    FCU: begin
+                        // FC-MAC coprocessor. Sub-function in instruction[5:4]:
+                        //   00 FCLR  -> clear acc
+                        //   01 FMAC  -> acc += rs*rt   (rs=[8:6], rt=[2:0])
+                        //   10 FRD   -> rd <- sat(acc>>Q) via the MAC writeback mux
+                        case (instruction[5:4])
+                            2'b00: decoded_fc_clear <= 1;
+                            2'b01: decoded_fc_mac   <= 1;
+                            2'b10: begin
+                                decoded_reg_write_enable <= 1;
+                                decoded_reg_input_mux    <= MUX_MAC;
+                                decoded_fc_read          <= 1;
+                            end
+                            default: ; // reserved
+                        endcase
+                    end
                     ADD: begin
                         // rs + rt -> rd
                         decoded_reg_write_enable <= 1;
@@ -163,8 +191,11 @@ module decoder (
                     end
                     BRn: begin
                         // Branch: tell pc.sv to route the jump target into the PC
-                        // (gated by the saved N/Z/P flags vs decoded_nzp).
-                        decoded_pc_mux <= 1;
+                        // (gated by the saved N/Z/P flags vs decoded_nzp). The target
+                        // is 8-bit (instruction[7:0]) so it can reach the whole 256-word
+                        // ROM, not just the low 64 the generic 6-bit immediate allows.
+                        decoded_pc_mux   <= 1;
+                        decoded_immediate <= instruction[7:0];
                     end
                     ADDB: begin
                         // Advance the data-memory base pointer by the immediate.

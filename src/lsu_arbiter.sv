@@ -11,7 +11,7 @@
 // all valids to drop before re-arming (avoids re-serving a lingering valid).
 module lsu_arbiter #(
     parameter THREADS   = 4,
-    parameter ADDR_BITS = 10
+    parameter ADDR_BITS = 12
 ) (
     input  wire                 clk,
     input  wire                 reset,

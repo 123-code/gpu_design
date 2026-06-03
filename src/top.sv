@@ -15,7 +15,13 @@
 // pulses gpu_start (no power-on auto-run). Everything is on one 27 MHz clock.
 // ============================================================================
 module top #(
-    parameter PAYLOAD_BYTES = 793,       // 784-byte image + 9 signed weights
+    // MNIST contiguous DMA payload, written from addr 0 upward:
+    //   0..783     28x28 image (784 B)
+    //   784..792   9 conv weights
+    //   793..2482  FC weights (169 x 10 = 1690 B)
+    //   2483..2492 10 FC biases
+    // GPU-computed scratch (conv map, pooled map, scores) lives above 2492.
+    parameter PAYLOAD_BYTES = 2493,
     parameter CLK_FREQ      = 27000000,  // for the UART bit timing (override in sim)
     parameter BAUD_RATE     = 115200
 ) (
@@ -32,13 +38,13 @@ module top #(
 
     // ---- Host-to-Device pipeline ----
     wire        gpu_start, loading;
-    wire [9:0]  mem_raddr;            // driven by the GPU's LSU arbiter
+    wire [11:0] mem_raddr;            // driven by the GPU's LSU arbiter (4096-byte space)
     wire [7:0]  mem_rdata;
     wire        done;                 // GPU finished a run
     wire [7:0]  result;
 
     data_pipeline #(
-        .ADDR_BITS(10),
+        .ADDR_BITS(12),
         .PAYLOAD_BYTES(PAYLOAD_BYTES),
         .CLK_FREQ(CLK_FREQ),
         .BAUD_RATE(BAUD_RATE)

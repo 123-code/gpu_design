@@ -19,7 +19,7 @@ module gpu (
     input wire [5:0] operand_b,  // -> R2 (loop count)
 
     // Core 0's data-memory read port (to main_memory via the system top)
-    output wire [9:0] mem_raddr,
+    output wire [11:0] mem_raddr,
     input  wire [7:0] mem_rdata,
 
     // Core 0's memory-mapped emit (STR -> UART TX)

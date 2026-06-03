@@ -14,7 +14,7 @@
 // Payload convention (drops straight onto the 3x3 MAC): addr 0..8 = 9 pixels,
 // addr 9..17 = 9 signed weights. Bump PAYLOAD_BYTES for larger frames.
 module dma_controller #(
-    parameter ADDR_BITS     = 10,
+    parameter ADDR_BITS     = 12,
     parameter PAYLOAD_BYTES = 18
 ) (
     input  wire                 clk,

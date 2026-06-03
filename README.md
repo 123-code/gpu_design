@@ -8,7 +8,41 @@ on the onboard LEDs.
 ## Status
 
 - ✅ Simulation passes (`R3 = 15`, core reaches `DONE`).
-- ✅ Synthesizes and runs on real hardware — the result lights up the LEDs.
+- ✅ Synthesizes and runs on real hardware — the LED demo lights up.
+- ✅ **UART multiply verified on hardware** (ASCII operand-injection build):
+  `7 6` → `042`, `5 3` → `015`, `12 5` → `060`, `9 9` → `081`, `63 4` → `252`.
+  This build clocks the GPU at **~13 kHz** (see Notes).
+- ✅ The newer **host-driven DMA** build closes timing at the full **27 MHz**
+  (0 setup / 0 hold violations, Fmax ≈ 97.6 MHz) — see Synthesis below.
+
+> **Two `top.sv` variants exist** (the repo is mid-transition):
+> 1. **ASCII operand-injection** — type `7 6`, get `042` back; operands patched
+>    into the ROM; GPU on a ~13 kHz divided clock. *This is the one verified on
+>    hardware* (and the one the Serial I/O section below describes).
+> 2. **Host-driven DMA** — raw bytes streamed `UART → DMA → memory`, GPU reads via
+>    `LDR`, runs at full 27 MHz. This is what the Gowin IDE project builds
+>    (`GowinIDE.app/.../IDE/bin/gpu/`, `build_uart.tcl` → `impl/pnr/gpu_uart.fs`);
+>    the `*.sh`/`*.tcl` here are a headless mirror — keep their source list in sync.
+
+## Synthesis & utilization (Tang Nano 20K · GW2AR-18C)
+
+From the post-place&route report (`impl/pnr/gpu_uart.rpt.html`) of the
+**host-driven DMA** build:
+
+| Resource              | Used                              | Available | Util. |
+|-----------------------|-----------------------------------|-----------|-------|
+| Logic (LUT+ALU+ROM16) | 1221 (900 LUT4, 321 ALU, 0 ROM16) | 20736     | 6 %   |
+| Registers             | 819 (818 FF + 1 I/O)              | 15750     | 6 %   |
+| CLS (slices)          | 1058                              | 10368     | 11 %  |
+| Block SRAM (SDPB)     | 1                                 | 46        | 3 %   |
+| DSP                   | 4× MULT9X9 + 5× MULTADDALU18X18   | —         | 25 %  |
+| I/O ports             | 9                                 | 66        | 14 %  |
+| PLL                   | 0                                 | 2         | 0 %   |
+
+**Timing:** 27 MHz constraint (37.037 ns) — **Actual Fmax 97.6 MHz**, 0 setup
+violations, 0 hold violations (TNS 0.000 on both). ~3.6× frequency headroom.
+The DSPs are the 3×3 MAC convolution coprocessor; everything else is the SIMT
+core, the 4-way LSU arbiter, and the UART/DMA host pipeline.
 
 ## Layout
 
@@ -78,6 +112,19 @@ screen /dev/cu.usbserial-XXXX 115200   # the UART interface (not the JTAG one)
 # type:  7 6 <Enter>   ->   042
 ```
 
+> **macOS baud gotcha (cost me a long debug session).** `stty` and plain Python
+> `termios` do **not** apply the baud rate to FTDI `cu.usbserial-*` ports — the
+> port silently stays at **9600**, and reading 115200 traffic at 9600 produces
+> deterministic *garbage* that looks exactly like a broken design but isn't. Use
+> `screen` (which sets it correctly), `pyserial`, or the `IOSSIOSPEED` ioctl
+> (`fcntl.ioctl(fd, 0x80045402, struct.pack('I', 115200))`). Verify with
+> `stty -f <port>` → it should read `speed 115200`, not `9600`.
+
+Of the two FTDI interfaces the board exposes, the **UART is `bInterfaceNumber 1`**
+(JTAG is interface 0). Also: `programmer_cli` SRAM loads are sometimes *partial*
+over the FT2232 — a run finishing in ~1.7 s (vs the normal ~6.6 s with a
+`Status Code` line) did **not** program; reflash and check.
+
 Operands are **6-bit (0–63)** (they land in 6-bit MOV immediates) and the result
 is 8-bit, so keep the product ≤ 255. The latest result also shows on the LEDs
 (`LED5` = done, `LED3..0` = low nibble). Implemented by `uart_rx.sv` + a decimal
@@ -93,9 +140,11 @@ ROM in `src/program_memory.sv` (addr 1 → `R2`, addr 3 → `R4`).
 - **No button reset.** The S1 button (PIN 88) did not read high when unpressed
   on this board, which pinned the GPU in reset (dark LEDs). `top.sv` uses
   power-on reset only.
-- **The GPU is clocked at ~13 kHz** (divided from 27 MHz) in `top.sv`. It only
-  needs to run the kernel once; this stays clear of a thin (~0.4 ns) hold margin
-  seen at full speed.
+- **GPU clock differs by build.** The **ASCII operand-injection** build (verified
+  on hardware) clocks the GPU at **~13 kHz** via a divider — it only needs to run
+  the kernel once per input and this stays clear of a thin hold margin. The newer
+  **host-driven DMA** build drops the divider and runs the GPU at the full
+  **27 MHz** (places & routes with 0 hold violations, Fmax ≈ 97.6 MHz).
 - macOS Gowin CLI: `build_fpga.sh` / `flash.sh` point `dyld` at the libraries
   and bundled Tcl framework inside `GowinIDE.app` so `gw_sh` runs headless.
 

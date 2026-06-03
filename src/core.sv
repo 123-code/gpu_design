@@ -3,7 +3,7 @@
 
 module core #(
     parameter THREADS_PER_BLOCK = 4,
-    parameter ADDR_BITS = 10
+    parameter ADDR_BITS = 12
 ) (
     input wire clk,
     input wire reset,
@@ -59,6 +59,9 @@ module core #(
     wire decoded_ret;
     wire decoded_mac_load;
     wire decoded_base_add;
+    wire decoded_fc_clear;
+    wire decoded_fc_mac;
+    wire decoded_fc_read;
 
     // ==========================================
     // INSTANTIATE THE (REAL) DECODER
@@ -86,7 +89,10 @@ module core #(
         .decoded_pc_mux(decoded_pc_mux),
         .decoded_ret(decoded_ret),
         .decoded_mac_load(decoded_mac_load),
-        .decoded_base_add(decoded_base_add)
+        .decoded_base_add(decoded_base_add),
+        .decoded_fc_clear(decoded_fc_clear),
+        .decoded_fc_mac(decoded_fc_mac),
+        .decoded_fc_read(decoded_fc_read)
     );
 
     // ==========================================
@@ -168,7 +174,10 @@ module core #(
     localparam UPDATE_STATE = 3'b110;
     reg  [7:0] mac_buf [0:17];
     reg  [4:0] mac_wptr;
-    wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11);
+    // Conv-MAC fires on the MAC writeback mux, but NOT when the same mux is being
+    // borrowed by the FC coprocessor's FRD readback.
+    wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11)
+                          && !decoded_fc_read;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -197,6 +206,26 @@ module core #(
         .pixel_out(mac_result),
         .valid_out()
     );
+
+    // ==========================================
+    // THE FC-MAC FUNCTIONAL UNIT (shared, core-level)
+    // ==========================================
+    // Wide (32-bit) accumulator for the fully-connected layer: thread 0 drives
+    // it (SIMT-uniform). FCLR/FMAC act in UPDATE; FRD reads it back through the
+    // MAC writeback mux (mux==11 with decoded_fc_read selecting fc over conv).
+    wire [7:0] fc_result;
+    fc_mac u_fc (
+        .clk(clk),
+        .reset(reset),
+        .clear (decoded_fc_clear && (core_state == UPDATE_STATE)),
+        .mac_en(decoded_fc_mac   && (core_state == UPDATE_STATE)),
+        .px(rs_bus[0]),
+        .wt(rt_bus[0]),
+        .result(fc_result)
+    );
+
+    // Writeback source for the shared MAC mux: conv MAC normally, FC readout on FRD.
+    wire [7:0] mac_or_fc_result = decoded_fc_read ? fc_result : mac_result;
 
     genvar i;
     generate
@@ -228,7 +257,7 @@ module core #(
                 .rs(rs_bus[i]),
                 .rt(rt_bus[i]),
 
-                .mac_result(mac_result),
+                .mac_result(mac_or_fc_result),
                 .debug_reg3(reg3_bus[i])
             );
 
