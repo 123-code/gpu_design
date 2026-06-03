@@ -134,6 +134,7 @@ module decoder (
                 decoded_base_add <= 0;
                 decoded_fc_clear <= 0;
                 decoded_fc_mac <= 0;
+                decoded_fc_arg <= 0;
                 decoded_fc_read <= 0;
 
                 // --- THE OPCODE SWITCH ---

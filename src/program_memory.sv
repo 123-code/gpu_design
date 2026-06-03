@@ -25,7 +25,7 @@ module program_memory #(
     // design constant-folds away). Update this if you move the repo.
     // Override with e.g. iverilog -DKERNEL_HEX="\"...conv_kernel.hex\"" for tests.
 `ifndef KERNEL_HEX
-    `define KERNEL_HEX "/Users/joseignacio/tiny-gpu-fpga/software/kernel.hex"
+    `define KERNEL_HEX "/Users/joseignacio/tiny-gpu-fpga/software/mnist_fc.hex"
 `endif
     initial begin
         // The Rust assembler writes this file (software/src/main.rs).

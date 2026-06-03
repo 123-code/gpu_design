@@ -15,13 +15,10 @@
 // pulses gpu_start (no power-on auto-run). Everything is on one 27 MHz clock.
 // ============================================================================
 module top #(
-    // MNIST contiguous DMA payload, written from addr 0 upward:
-    //   0..783     28x28 image (784 B)
-    //   784..792   9 conv weights
-    //   793..2482  FC weights (169 x 10 = 1690 B)
-    //   2483..2492 10 FC biases
-    // GPU-computed scratch (conv map, pooled map, scores) lives above 2492.
-    parameter PAYLOAD_BYTES = 2493,
+    // MNIST FC-classifier payload (mnist_fc.asm): the host streams the
+    // interleaved (feature, weight) sweep -- 10 digits x 169 inputs x 2 bytes =
+    // 3380 bytes -- which the GPU base-sweeps through the FC-MAC coprocessor.
+    parameter PAYLOAD_BYTES = 3380,
     parameter CLK_FREQ      = 27000000,  // for the UART bit timing (override in sim)
     parameter BAUD_RATE     = 115200
 ) (

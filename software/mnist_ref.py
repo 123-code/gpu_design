@@ -86,6 +86,16 @@ def main():
         for v in pooled:
             f.write(f"{v & 0xFF:02X}\n")
 
+    # dump the interleaved FC payload the on-chip FC kernel base-sweeps:
+    #   for digit d, for input i: [ feature[i], fc_weight[d*169+i] ]
+    # Features are repeated per digit because the LSU base pointer (ADDB) only
+    # moves forward, so the whole FC pass must be one monotonic sweep. 3380 bytes.
+    with open(os.path.join(DATA, f"fc_payload{idx}.hex"), "w") as f:
+        for d in range(10):
+            for i in range(169):
+                f.write(f"{pooled[i] & 0xFF:02X}\n")
+                f.write(f"{fcw[d*169 + i] & 0xFF:02X}\n")
+
     tag = "" if label is None else f"  (label {label}, {'HIT' if label == pred else 'miss'})"
     print(f"image {idx}: predicted digit = {pred}{tag}")
     print("scores:", scores)
