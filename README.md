@@ -117,6 +117,65 @@ python3 send_mnist.py mnist_data/image0.hex     # -> predicted digit (7)
 `mnist_ref.py` is a faithful software model of the exact RTL pipeline; use it to generate
 images for any index in the bundled batch and to check predictions.
 
+## Flashing — the reliable recipe (read this, it'll save you an hour)
+
+The Tang Nano shows up as **two** USB-serial devices. Both matter:
+
+```sh
+ls /dev/cu.usbserial-*       # macOS — two ports appear
+```
+
+- the **lower-numbered** port = FTDI interface 0 = **JTAG** (used to *flash*)
+- the **higher-numbered** port = FTDI interface 1 = **UART** (used to *talk* to the design)
+
+### Option A — `openFPGALoader` (recommended)
+
+```sh
+brew install openfpgaloader                                   # one-time
+openFPGALoader -b tangnano20k impl/pnr/tiny_gpu.fs            # SRAM: fast, volatile
+openFPGALoader -b tangnano20k -f impl/pnr/tiny_gpu.fs         # SPI flash: survives power-cycle
+```
+
+### Option B — bundled Gowin `programmer_cli` via `flash.sh` (SRAM only)
+
+```sh
+FS="$(pwd)/impl/pnr/tiny_gpu.fs" ./flash.sh
+```
+
+- **Use an absolute `FS` path.** `programmer_cli` rejects a relative one with
+  `Error: Not found any data File`. (`flash.sh` defaults to the in-bundle Gowin project's
+  `.fs`; override `FS` to flash *this* repo's build.)
+- **A good flash looks like this** — check for all three:
+  ```
+  Target Device: GW2AR-18C(0x0000081B)
+  Status Code is: 0x00006020
+  Finished.                       Cost 5–7 second(s)
+  ```
+
+### When it fights you (it will) — how to recover
+
+| symptom | meaning | fix |
+|---|---|---|
+| `Error: Error found!` or finishes in **~1.7 s** | partial / failed program | just run the flash **once** more |
+| `Cable failed to open via the channel` | the FT2232 bridge has wedged (usually from rapid retries) | **unplug the board, replug, wait ~3 s, try one clean flash** |
+| board stops responding after a USB drop | SRAM is volatile + the USB-powered board browned out and lost its config | reflash |
+| ports vanish from `/dev/cu.*` | FTDI de-enumerated | replug |
+
+**The golden rule: don't hammer it.** Rapid back-to-back flash attempts are what wedge the
+cable. Do **one** attempt; if it errors, wait a couple seconds and try **once** more; if the
+cable won't open, **replug and do a single clean flash**. SRAM loads are volatile — use the
+SPI-flash option (or `make flash-persist`) if you want it to survive a power cycle.
+
+### Then run it
+
+Stream an image over the **UART** port (the higher-numbered one). On macOS, set the baud
+with `screen`/`pyserial`/`IOSSIOSPEED` — plain `stty` silently leaves it at 9600 (see
+gotchas):
+
+```sh
+cd software && python3 send_mnist.py mnist_data/image0.hex     # -> predicted digit
+```
+
 ## Repo layout
 
 ```
