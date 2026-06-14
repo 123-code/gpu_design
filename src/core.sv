@@ -2,40 +2,35 @@
 `timescale 1ns/1ns
 
 module core #(
-    parameter THREADS_PER_BLOCK = 4,
-    parameter ADDR_BITS = 13
+    parameter THREADS_PER_BLOCK = 4,// defines how many threads run in parallel within this core
+    parameter ADDR_BITS = 13//width of data memoory address
 ) (
-    input wire clk,
-    input wire reset,
-    input wire start,
-    input wire [7:0] block_id,
-    output wire done,
+    input wire clk,//clock
+    input wire reset,//reset signal
+    input wire start,//cycle pulse from dispatcher, when 1, core begins execution
+    input wire [7:0] block_id,//8 bit identfier, which block of data is this core processing
+    output wire done,//when 1, core has finished processing
 
-    // ==========================================
-    // DATA MEMORY READ PORT (serialized across threads by lsu_arbiter)
-    // ==========================================
-    output wire [ADDR_BITS-1:0] mem_raddr,
-    input  wire [7:0]           mem_rdata,
+//dtata memory read (since multiple threads want to read simultaneously, read requests are serialized by arbiter)
+    output wire [ADDR_BITS-1:0] mem_raddr,//address
+    input  wire [7:0]           mem_rdata,//data
 
     // Memory-mapped emit (thread 0's STR to offset 63 -> UART TX)
     output wire                 emit_valid,
     output wire [7:0]           emit_data,
     input  wire                 emit_ready,
 
-    // Data-memory WRITE port (thread 0's STR to a non-MMIO address -> main_memory)
-    output wire                 mem_we,
-    output wire [ADDR_BITS-1:0]  mem_waddr,
-    output wire [7:0]            mem_wdata,
+    // data write from threads back to ram
+    output wire                 mem_we,//write eneble
+    output wire [ADDR_BITS-1:0]  mem_waddr,//ram address where data will be stored
+    output wire [7:0]            mem_wdata,//data to be stored in memory
 
-    // ==========================================
-    // NEW: THE MEMORY SPINE
-    // ==========================================
+
     output wire [7:0] instruction_address, // Asking the ROM for code
     input wire [15:0] current_instruction, // Receiving the code from ROM
 
     // Debug tap: thread 0's R3 (the accumulator) for the LED display
     output wire [7:0] result,
-
     // Debug tap: the scheduler FSM state, for hardware bring-up visibility
     output wire [2:0] debug_core_state
 );
@@ -69,6 +64,7 @@ module core #(
     wire decoded_fc_mac;
     wire decoded_fc_arg;
     wire decoded_fc_read;
+    wire decoded_id_read;
 
     // ==========================================
     // INSTANTIATE THE (REAL) DECODER
@@ -101,7 +97,8 @@ module core #(
         .decoded_fc_clear(decoded_fc_clear),
         .decoded_fc_mac(decoded_fc_mac),
         .decoded_fc_arg(decoded_fc_arg),
-        .decoded_fc_read(decoded_fc_read)
+        .decoded_fc_read(decoded_fc_read),
+        .decoded_id_read(decoded_id_read)
     );
 
     // ==========================================
@@ -276,6 +273,7 @@ module core #(
 
                 .decoded_reg_write_enable(decoded_reg_write_enable),
                 .decoded_reg_input_mux(decoded_reg_input_mux),
+                .decoded_id_read(decoded_id_read),
                 .decoded_immediate(decoded_immediate),
 
                 .alu_out(alu_out_bus[i]),

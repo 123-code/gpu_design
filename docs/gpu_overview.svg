@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1720" height="800" viewBox="0 0 1720 800" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .lbl  { fill:#0f172a; }
+      .sub  { fill:#475569; font-size:11px; }
+      .wire { stroke:#334155; stroke-width:1.6; fill:none; marker-end:url(#arr); }
+      .blk  { rx:7; ry:7; stroke-width:1.6; }
+      .ctrl { fill:#ede9fe; stroke:#7c3aed; }
+      .mem  { fill:#fde68a; stroke:#d97706; }
+      .sys  { fill:#dbeafe; stroke:#2563eb; }
+      .comp { fill:#dcfce7; stroke:#16a34a; }
+      .lane { fill:#ffffff; stroke:#94a3b8; }
+    </style>
+  </defs>
+
+  <rect width="1720" height="800" fill="#ffffff"/>
+  <text x="860" y="34" text-anchor="middle" font-size="24" font-weight="bold" class="lbl">tiny-gpu — full architecture (one image)</text>
+  <text x="860" y="56" text-anchor="middle" font-size="12" class="sub">SIMT GPU on a Tang Nano 20K (GW2AR-18). Block names match src/*.sv.</text>
+
+  <!-- system row -->
+  <rect x="40" y="84" width="150" height="46" class="blk sys"/>
+  <text x="115" y="105" text-anchor="middle" font-size="13" class="lbl">Host PC</text>
+  <text x="115" y="121" text-anchor="middle" class="sub">draws a digit</text>
+  <rect x="250" y="84" width="130" height="46" class="blk sys"/>
+  <text x="315" y="105" text-anchor="middle" font-size="13" class="lbl">uart_rx</text>
+  <text x="315" y="121" text-anchor="middle" class="sub">115200 baud</text>
+  <rect x="440" y="84" width="160" height="46" class="blk ctrl"/>
+  <text x="520" y="105" text-anchor="middle" font-size="13" class="lbl">dma_controller</text>
+  <text x="520" y="121" text-anchor="middle" class="sub">streams bytes to RAM</text>
+  <rect x="660" y="84" width="220" height="46" class="blk mem"/>
+  <text x="770" y="104" text-anchor="middle" font-size="13" class="lbl">main_memory</text>
+  <text x="770" y="121" text-anchor="middle" class="sub">8 KB dual-port BRAM</text>
+  <path class="wire" d="M190,107 L248,107"/>
+  <path class="wire" d="M380,107 L438,107"/>
+  <path class="wire" d="M600,107 L658,107"/>
+  <text x="220" y="78" text-anchor="middle" class="sub">2×784 B image</text>
+  <path class="wire" d="M770,130 L770,170 L770,208"/>
+  <text x="900" y="160" text-anchor="middle" class="sub">mem_rdata ↔ mem_raddr / writes</text>
+
+  <!-- GPU box -->
+  <rect x="30" y="210" width="1660" height="420" rx="12" ry="12" fill="#f8fafc" stroke="#475569" stroke-width="2"/>
+  <text x="50" y="236" font-size="17" font-weight="bold" class="lbl">gpu.sv  ·  instance “uut”</text>
+
+  <rect x="660" y="240" width="400" height="44" class="blk ctrl"/>
+  <text x="860" y="261" text-anchor="middle" font-size="13" class="lbl">dispatcher — thread-block scheduler</text>
+  <text x="860" y="277" text-anchor="middle" class="sub">starts each core · done = both cores done</text>
+  <path class="wire" d="M760,284 L760,300 L455,300 L455,310"/>
+  <path class="wire" d="M960,284 L960,300 L1285,300 L1285,310"/>
+
+  <!-- CORE 0 -->
+  <rect x="50" y="288" width="810" height="320" rx="10" ry="10" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+  <text x="68" y="310" font-size="14" font-weight="bold" class="lbl">compute_core_0 · core.sv — SIMT, 4 threads/block</text>
+  <rect x="70" y="320" width="180" height="40" class="blk mem"/>
+  <text x="160" y="338" text-anchor="middle" font-size="12" class="lbl">program_memory</text>
+  <text x="160" y="353" text-anchor="middle" class="sub">256×16 instruction ROM</text>
+  <rect x="266" y="320" width="160" height="40" class="blk ctrl"/>
+  <text x="346" y="338" text-anchor="middle" font-size="12" class="lbl">core_decoder</text>
+  <text x="346" y="353" text-anchor="middle" class="sub">16-bit → control</text>
+  <rect x="442" y="320" width="398" height="40" class="blk ctrl"/>
+  <text x="641" y="338" text-anchor="middle" font-size="12" class="lbl">core_scheduler (warp FSM)</text>
+  <text x="641" y="353" text-anchor="middle" class="sub">FETCH→DECODE→REQUEST→WAIT→EXECUTE→UPDATE</text>
+
+  <rect x="70" y="378" width="185" height="132" class="blk lane"/>
+  <text x="162" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 0</text>
+  <text x="162" y="420" text-anchor="middle" font-size="11" class="lbl">registers R0–R7,13–15</text>
+  <text x="162" y="442" text-anchor="middle" font-size="11" class="lbl">alu</text>
+  <text x="162" y="464" text-anchor="middle" font-size="11" class="lbl">lsu (rbase/wbase+off)</text>
+  <text x="162" y="486" text-anchor="middle" font-size="11" class="lbl">pc (NZP branch)</text>
+  <rect x="262" y="378" width="185" height="132" class="blk lane"/>
+  <text x="354" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 1</text>
+  <text x="354" y="438" text-anchor="middle" font-size="11" class="lbl">registers · alu</text>
+  <text x="354" y="460" text-anchor="middle" font-size="11" class="lbl">lsu · pc</text>
+  <rect x="454" y="378" width="185" height="132" class="blk lane"/>
+  <text x="546" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 2</text>
+  <text x="546" y="438" text-anchor="middle" font-size="11" class="lbl">registers · alu</text>
+  <text x="546" y="460" text-anchor="middle" font-size="11" class="lbl">lsu · pc</text>
+  <rect x="646" y="378" width="194" height="132" class="blk lane"/>
+  <text x="743" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 3</text>
+  <text x="743" y="438" text-anchor="middle" font-size="11" class="lbl">registers · alu</text>
+  <text x="743" y="460" text-anchor="middle" font-size="11" class="lbl">lsu · pc</text>
+
+  <rect x="70" y="524" width="240" height="44" class="blk ctrl"/>
+  <text x="190" y="544" text-anchor="middle" font-size="12" class="lbl">core_lsu_arbiter</text>
+  <text x="190" y="559" text-anchor="middle" class="sub">4 lanes → 1 read port</text>
+  <rect x="326" y="524" width="240" height="44" class="blk comp"/>
+  <text x="446" y="544" text-anchor="middle" font-size="12" class="lbl">mac_array_3x3 (u_mac)</text>
+  <text x="446" y="559" text-anchor="middle" class="sub">conv MACs · DSP</text>
+  <rect x="582" y="524" width="258" height="44" class="blk comp"/>
+  <text x="711" y="544" text-anchor="middle" font-size="12" class="lbl">fc_mac (u_fc)</text>
+  <text x="711" y="559" text-anchor="middle" class="sub">32-bit acc+bias · argmax</text>
+  <text x="455" y="590" text-anchor="middle" class="sub">thread 0 drives stores, the MACs and emit (SIMT-uniform)</text>
+
+  <!-- CORE 1 -->
+  <rect x="880" y="288" width="810" height="320" rx="10" ry="10" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+  <text x="898" y="310" font-size="14" font-weight="bold" class="lbl">compute_core_1 · core.sv — own ROM + own memory copy</text>
+  <rect x="900" y="320" width="180" height="40" class="blk mem"/>
+  <text x="990" y="338" text-anchor="middle" font-size="12" class="lbl">program_memory</text>
+  <text x="990" y="353" text-anchor="middle" class="sub">256×16 instruction ROM</text>
+  <rect x="1096" y="320" width="160" height="40" class="blk ctrl"/>
+  <text x="1176" y="338" text-anchor="middle" font-size="12" class="lbl">core_decoder</text>
+  <text x="1176" y="353" text-anchor="middle" class="sub">16-bit → control</text>
+  <rect x="1272" y="320" width="398" height="40" class="blk ctrl"/>
+  <text x="1471" y="338" text-anchor="middle" font-size="12" class="lbl">core_scheduler (warp FSM)</text>
+  <text x="1471" y="353" text-anchor="middle" class="sub">FETCH→DECODE→REQUEST→WAIT→EXECUTE→UPDATE</text>
+
+  <rect x="900" y="378" width="185" height="132" class="blk lane"/>
+  <text x="992" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 0</text>
+  <text x="992" y="420" text-anchor="middle" font-size="11" class="lbl">registers R0–R7,13–15</text>
+  <text x="992" y="442" text-anchor="middle" font-size="11" class="lbl">alu</text>
+  <text x="992" y="464" text-anchor="middle" font-size="11" class="lbl">lsu (rbase/wbase+off)</text>
+  <text x="992" y="486" text-anchor="middle" font-size="11" class="lbl">pc (NZP branch)</text>
+  <rect x="1092" y="378" width="185" height="132" class="blk lane"/>
+  <text x="1184" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 1</text>
+  <text x="1184" y="438" text-anchor="middle" font-size="11" class="lbl">registers · alu</text>
+  <text x="1184" y="460" text-anchor="middle" font-size="11" class="lbl">lsu · pc</text>
+  <rect x="1284" y="378" width="185" height="132" class="blk lane"/>
+  <text x="1376" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 2</text>
+  <text x="1376" y="438" text-anchor="middle" font-size="11" class="lbl">registers · alu</text>
+  <text x="1376" y="460" text-anchor="middle" font-size="11" class="lbl">lsu · pc</text>
+  <rect x="1476" y="378" width="194" height="132" class="blk lane"/>
+  <text x="1573" y="397" text-anchor="middle" font-size="12" font-weight="bold" class="lbl">thread lane 3</text>
+  <text x="1573" y="438" text-anchor="middle" font-size="11" class="lbl">registers · alu</text>
+  <text x="1573" y="460" text-anchor="middle" font-size="11" class="lbl">lsu · pc</text>
+
+  <rect x="900" y="524" width="240" height="44" class="blk ctrl"/>
+  <text x="1020" y="544" text-anchor="middle" font-size="12" class="lbl">core_lsu_arbiter</text>
+  <text x="1020" y="559" text-anchor="middle" class="sub">4 lanes → 1 read port</text>
+  <rect x="1156" y="524" width="240" height="44" class="blk comp"/>
+  <text x="1276" y="544" text-anchor="middle" font-size="12" class="lbl">mac_array_3x3 (u_mac)</text>
+  <text x="1276" y="559" text-anchor="middle" class="sub">conv MACs · DSP</text>
+  <rect x="1412" y="524" width="258" height="44" class="blk comp"/>
+  <text x="1541" y="544" text-anchor="middle" font-size="12" class="lbl">fc_mac (u_fc)</text>
+  <text x="1541" y="559" text-anchor="middle" class="sub">32-bit acc+bias · argmax</text>
+  <text x="1285" y="590" text-anchor="middle" class="sub">classifies the 2nd image concurrently · served after core 0 on the UART</text>
+
+  <!-- output row -->
+  <rect x="300" y="664" width="140" height="46" class="blk sys"/>
+  <text x="370" y="685" text-anchor="middle" font-size="13" class="lbl">led[5:0]</text>
+  <text x="370" y="701" text-anchor="middle" class="sub">result / done</text>
+  <rect x="490" y="664" width="180" height="46" class="blk ctrl"/>
+  <text x="580" y="685" text-anchor="middle" font-size="13" class="lbl">emit → UART FSM</text>
+  <text x="580" y="701" text-anchor="middle" class="sub">thread 0 STR to MMIO 63</text>
+  <rect x="720" y="664" width="130" height="46" class="blk sys"/>
+  <text x="785" y="690" text-anchor="middle" font-size="13" class="lbl">uart_tx</text>
+  <rect x="900" y="664" width="220" height="46" class="blk sys"/>
+  <text x="1010" y="684" text-anchor="middle" font-size="13" class="lbl">Host PC</text>
+  <text x="1010" y="701" text-anchor="middle" class="sub">predicted digit + cycle count</text>
+  <path class="wire" d="M420,630 L420,650 L370,650 L370,662"/>
+  <path class="wire" d="M560,630 L560,650 L580,650 L580,662"/>
+  <path class="wire" d="M440,687 L488,687"/>
+  <path class="wire" d="M670,687 L718,687"/>
+  <path class="wire" d="M850,687 L898,687"/>
+
+  <!-- resource footer -->
+  <rect x="1190" y="650" width="500" height="120" rx="8" fill="#f1f5f9" stroke="#475569"/>
+  <text x="1210" y="674" font-size="14" font-weight="bold" class="lbl">On-chip resources (GW2AR-18, post-P&amp;R)</text>
+  <text x="1210" y="697" font-size="12" class="sub">Logic (LUT+ALU): 2,979 / 20,736  ·  15%</text>
+  <text x="1210" y="716" font-size="12" class="sub">Registers (FF): 1,693 / 15,750  ·  11%</text>
+  <text x="1210" y="735" font-size="12" class="sub">BSRAM: 10 / 46   ·   DSP (MULT-ADD 18×18): 12 / 24</text>
+  <text x="1210" y="754" font-size="12" class="sub">Primitives: 5,024   ·   Nets: 7,996</text>
+</svg>

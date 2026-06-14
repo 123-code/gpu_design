@@ -12,6 +12,14 @@ drives — the same division of labor as tensor cores on a real GPU. It is delib
 *tiny* (8-bit datapath, single 3×3 conv filter, 256-instruction ROM); accuracy on the
 bundled 50-image test set is ~94%. But it is, honestly, a GPU executing an AI model.
 
+## Architecture
+
+![tiny-gpu architecture](docs/gpu_overview.png)
+
+The whole design on one sheet: host UART → DMA → memory → the GPU (dispatcher + two SIMT
+cores, each with a decoder, scheduler, four thread lanes, LSU arbiter, and conv/FC MAC
+coprocessors) → UART out. Every block name matches a module in `src/*.sv`.
+
 ## Status
 
 - ✅ **Full MNIST CNN runs on the FPGA.** Five images streamed back-to-back (no reflash)
@@ -19,6 +27,51 @@ bundled 50-image test set is ~94%. But it is, honestly, a GPU executing an AI mo
 - ✅ **Bit-exact to a Python reference** in simulation: conv map 676/676, pooled 169/169,
   end-to-end predictions match `software/mnist_ref.py` on every image tested.
 - ✅ Closes timing at the native **27 MHz** clock (0 setup / 0 hold violations).
+
+## Demo — draw a digit, watch the GPU read it
+
+![tiny-gpu pipeline demo](docs/demo.png)
+
+A browser canvas streams your digit to the board; the page then animates every stage of
+the on-chip pipeline — **input 28×28 → conv 26×26 → max-pool 13×13 → FC logits → argmax** —
+and shows the predicted digit with the real on-chip run time.
+
+```sh
+make demo            # serves http://localhost:8000
+```
+
+Two ways to run it:
+
+- **Live (board attached).** With the Tang Nano plugged in, the page auto-enables
+  *Live* mode: draw → the image is streamed over UART, the FPGA classifies it, and the
+  **digit + cycle-accurate timing come straight from silicon**.
+- **Gallery (no hardware).** With no board (or when opened as a static page — it's
+  hostable on GitHub Pages), the page falls back to *Gallery* mode and replays captured
+  runs from `demo/recordings/`. Capture your own:
+
+  ```sh
+  make record                       # canonical 0–9 spread, real on-chip timing (needs the board)
+  python3 demo/record.py --offline  # stages only, no board (reference digit, no timing)
+  ```
+
+> **What's real vs. reference:** the **digit and timing are read back from the actual
+> FPGA**. The conv/pool/FC stage *images* are rendered from `mnist_ref.py`, the bit-exact
+> software model of the same RTL (verified equal in simulation: conv 676/676, pool
+> 169/169) — so they show exactly what the chip computed, without a firmware change to
+> dump the intermediate BRAMs.
+
+### Recording a GIF/clip
+
+To capture the looping GIF for this section, screen-record the live page on the real
+board and convert (macOS):
+
+```sh
+# record the browser window with QuickTime / ⇧⌘5, save out.mov, then:
+ffmpeg -i out.mov -vf "fps=18,scale=900:-1:flags=lanczos" -loop 0 docs/demo.gif
+#   or, sharper/smaller:  brew install gifski && gifski --fps 18 --width 900 -o docs/demo.gif frames/*.png
+```
+
+Then swap `docs/demo.png` above for `docs/demo.gif`.
 
 ## How it works
 
@@ -42,6 +95,11 @@ All weights/biases are **baked into the bitstream** (trained model from the comp
 `cnn_chip` project): conv weights into the MAC coprocessor, FC weights into a BRAM buffer,
 biases into the FC-MAC ROM. The host sends only the image.
 
+The full datapath (GPU core + coprocessors + memory/DMA + UART) is laid out in
+[`docs/architecture.md`](docs/architecture.md):
+
+![architecture](docs/architecture.svg)
+
 ### Data-memory map (8 KB BRAM, `ADDR_BITS=13`)
 
 | range        | contents                                   | written by |
@@ -64,6 +122,7 @@ The LSU has **two base pointers** so a stage can read one region and write anoth
 | `0000` | `FRST`/`FMAC`/`FARG`/`FBEST` | FC-MAC coprocessor (sub-fn in `[5:4]`): reset / `acc+=rs*rt` / finalize digit (add int32 bias, argmax) / read predicted digit |
 | `0001` | `ADD rd,rs,rt` | rd = rs + rt |
 | `0010` | `MOV rd,#imm` | rd = imm (6-bit) |
+| `0010` | `TID`/`BID`/`BDIM rd` | `MOV` with `rs`≠0: rd = threadIdx (R15) / blockIdx (R13) / blockDim (R14) |
 | `0011` | `CMP rs,rt` | set N/Z/P flags |
 | `0100` | `LDR rd,[rs]` | rd = mem[rbase + rs] |
 | `0101` | `ADDI rd,rs,#imm` | rd = rs + imm |
@@ -77,7 +136,10 @@ The LSU has **two base pointers** so a stage can read one region and write anoth
 | `1111` | `RET` | halt thread |
 | *(pseudo)* | `MAX rd,ra,rb` | assembler-expanded (`CMP`+`BRn`+`ADDI`) |
 
-Only **R0–R7** are instruction-addressable (3-bit fields); R13–R15 are SIMT identity regs.
+Only **R0–R7** are instruction-addressable (3-bit fields); R13–R15 are SIMT identity regs,
+readable via `TID`/`BID`/`BDIM` (which copy them into an R0–R7 register). With `TID`, the 4
+lanes finally diverge — e.g. `TID R1` then `LDR R2,[R1]` loads `mem[threadIdx]` per lane. See
+`software/divergent_load.asm` and `test/tb_tid.sv`.
 
 ## Synthesis & utilization (Tang Nano 20K · GW2AR-18C)
 

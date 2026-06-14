@@ -100,6 +100,12 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "SHL" => vec![w(0b1101, reg(&toks[1]), reg(&toks[2]), reg(&toks[3]))],
         "SUB" => vec![w(0b1110, reg(&toks[1]), reg(&toks[2]), reg(&toks[3]))],
         "MOV" => vec![w(0b0010, reg(&toks[1]), 0, imm(&toks[2]))],
+        // SIMT identity reads: MOV-variant with rs selecting an identity register.
+        //   TID  rd -> rd = threadIdx (R15)   BID rd -> rd = blockIdx (R13)
+        //   BDIM rd -> rd = blockDim  (R14)
+        "TID" => vec![w(0b0010, reg(&toks[1]), 1, 0)],
+        "BID" => vec![w(0b0010, reg(&toks[1]), 2, 0)],
+        "BDIM" => vec![w(0b0010, reg(&toks[1]), 3, 0)],
         "CMP" => vec![w(0b0011, 0, reg(&toks[1]), reg(&toks[2]))],
         "LDR" => vec![w(0b0100, reg(&toks[1]), reg(&toks[2]), 0)],
         "MACL" => vec![w(0b0110, 0, reg(&toks[1]), 0)],

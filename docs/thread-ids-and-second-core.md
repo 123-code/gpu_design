@@ -8,7 +8,14 @@ flash on this Tang Nano 20K (GW2AR-18C)? Yes, with caveats; reasoning below.
 
 ## Part 1 — Make thread IDs actually usable (real SIMT data parallelism)
 
-### Where we are today
+> **✅ IMPLEMENTED.** `TID` / `BID` / `BDIM` exist as a `MOV`-variant (`rs` field selects the
+> identity register). Verified in `test/tb_tid.sv`: the 4 lanes read distinct `threadIdx`
+> (`R1 = 0,1,2,3`) and a divergent `LDR R2,[R1]` loads `mem[threadIdx]` per lane
+> (`software/divergent_load.asm`). MNIST regression (`tb_mnist_full`, digit 7) still passes.
+> The write path note below still holds — only thread 0's stores reach memory, so the
+> demonstration uses divergent *reads* through the existing `lsu_arbiter`.
+
+### Where we are today (before this change)
 The hardware already *has* per-thread identity registers (`src/registers.sv`):
 
 ```

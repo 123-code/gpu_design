@@ -28,6 +28,10 @@ module registers #(
     input wire [1:0] decoded_reg_input_mux,    // Switch: "Where is the data coming from?"
     input wire [DATA_BITS-1:0] decoded_immediate, // Raw constant number from instruction
 
+    // SIMT identity read (TID/BID/BDIM): when high, write the identity register
+    // picked by decoded_rs_address (1->R15, 2->R13, 3->R14) into rd.
+    input wire decoded_id_read,
+
     // ==========================================
     // PART 3: DATA PINS IN (Wires bringing answers back)
     // ==========================================
@@ -100,22 +104,33 @@ module registers #(
                 
                 // Only write if the Decoder says so, AND we aren't trying to overwrite R13, R14, or R15 [cite: 341]
                 if (decoded_reg_write_enable && decoded_rd_address < 13) begin
-                    
-                    // The Multiplexer: Which incoming wire are we saving? [cite: 342]
-                    case (decoded_reg_input_mux)
-                        ARITHMETIC: begin 
-                            registers[decoded_rd_address] <= alu_out; // Save ALU answer [cite: 342]
-                        end
-                        MEMORY: begin 
-                            registers[decoded_rd_address] <= lsu_out; // Save Memory answer [cite: 343]
-                        end
-                        CONSTANT: begin
-                            registers[decoded_rd_address] <= decoded_immediate; // Save raw number [cite: 344]
-                        end
-                        MAC: begin
-                            registers[decoded_rd_address] <= mac_result; // Save 3x3 MAC result
-                        end
-                    endcase
+
+                    if (decoded_id_read) begin
+                        // TID/BID/BDIM: copy a read-only identity register into rd.
+                        // Selector reuses the rs field (already {1'b0, instr[8:6]}).
+                        case (decoded_rs_address)
+                            4'd1: registers[decoded_rd_address] <= registers[15]; // TID  -> threadIdx
+                            4'd2: registers[decoded_rd_address] <= registers[13]; // BID  -> blockIdx
+                            4'd3: registers[decoded_rd_address] <= registers[14]; // BDIM -> blockDim
+                            default: registers[decoded_rd_address] <= registers[15];
+                        endcase
+                    end else begin
+                        // The Multiplexer: Which incoming wire are we saving? [cite: 342]
+                        case (decoded_reg_input_mux)
+                            ARITHMETIC: begin
+                                registers[decoded_rd_address] <= alu_out; // Save ALU answer [cite: 342]
+                            end
+                            MEMORY: begin
+                                registers[decoded_rd_address] <= lsu_out; // Save Memory answer [cite: 343]
+                            end
+                            CONSTANT: begin
+                                registers[decoded_rd_address] <= decoded_immediate; // Save raw number [cite: 344]
+                            end
+                            MAC: begin
+                                registers[decoded_rd_address] <= mac_result; // Save 3x3 MAC result
+                            end
+                        endcase
+                    end
                 end
             end
         end
