@@ -14,11 +14,18 @@ bundled 50-image test set is ~94%. But it is, honestly, a GPU executing an AI mo
 
 ## Architecture
 
-![tiny-gpu architecture](docs/gpu_overview.png)
+**One SIMT core (`core.sv`).** A warp scheduler and decoder drive four thread lanes in
+lockstep; each lane has its own registers, ALU, LSU, and PC. The four lanes share an LSU
+arbiter (1 memory port) and two MAC coprocessors — `mac_array_3x3` (conv) and `fc_mac`
+(FC + argmax) — that thread 0 feeds SIMT-uniformly.
 
-The whole design on one sheet: host UART → DMA → memory → the GPU (dispatcher + two SIMT
-cores, each with a decoder, scheduler, four thread lanes, LSU arbiter, and conv/FC MAC
-coprocessors) → UART out. Every block name matches a module in `src/*.sv`.
+![tiny-gpu single core](docs/core_detail.png)
+
+**The whole chip.** Two of those cores sit under a dispatcher, fed by the host UART → DMA →
+memory chain, with the result emitted back over UART. Every block name matches a module in
+`src/*.sv`.
+
+![tiny-gpu architecture](docs/gpu_overview.png)
 
 ## Status
 
