@@ -9,12 +9,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Bitstream to flash. The canonical artifact is produced by the Gowin IDE
-# project in the app bundle; override with `FS=/path/to.fs ./flash.sh` if needed.
+# Bitstream to flash. The canonical artifact is the local headless build
+# (./build_fpga.sh); override with `FS=/path/to.fs ./flash.sh` if needed.
 GOWIN_GPU="/Applications/GowinIDE.app/Contents/Resources/Gowin_EDA/IDE/bin/gpu"
-FS="${FS:-$GOWIN_GPU/impl/pnr/gpu_uart.fs}"
-[ -f "$FS" ] || FS="impl/pnr/tiny_gpu.fs"   # fall back to a local headless build
+FS="${FS:-impl/pnr/tiny_gpu.fs}"
+[ -f "$FS" ] || FS="$GOWIN_GPU/impl/pnr/gpu_uart.fs"   # fall back to the (stale) IDE project build
 [ -f "$FS" ] || { echo "No bitstream found (looked in the Gowin project and impl/pnr/). Build first."; exit 1; }
+FS="$(cd "$(dirname "$FS")" && pwd)/$(basename "$FS")"   # programmer_cli rejects relative paths
 echo ">> Flashing: $FS"
 
 MODE="${1:-sram}"

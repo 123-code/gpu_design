@@ -18,3 +18,4 @@ software/mnist_data/fc_payload*.hex
 
 # macOS
 .DS_Store
+.gstack/

@@ -41,16 +41,26 @@ def load_labels(path):
 def s8(v):  return v - 256 if v > 127 else v
 def s32(v): return v - (1 << 32) if v >= (1 << 31) else v
 
-def main():
-    idx = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    weights = load_hex(os.path.join(DATA, "weights.hex"))   # 1699 int8
-    biases  = [s32(v) for v in load_hex(os.path.join(DATA, "bias.hex"))]  # 11 int32
-    imgs    = load_hex(os.path.join(DATA, "images_batch.hex"))
 
-    img = imgs[idx*784 : idx*784 + 784]                     # 28x28 unsigned
+def load_model(data_dir=DATA):
+    """Return (weights, biases) from mnist_data/, ready for run_pipeline().
+    weights: 1699 raw uint8 (9 conv + 1690 FC); biases: 11 signed int32."""
+    weights = load_hex(os.path.join(data_dir, "weights.hex"))
+    biases  = [s32(v) for v in load_hex(os.path.join(data_dir, "bias.hex"))]
+    return weights, biases
+
+
+def run_pipeline(img, weights, biases):
+    """Bit-exact software model of the on-chip CNN. Given a 784-byte unsigned
+    image and the (weights, biases) from load_model(), return the same stages
+    the RTL computes:
+        conv   : 676 (26x26) quantized conv-map bytes, row-major
+        pooled : 169 (13x13) max-pooled bytes, row-major
+        scores : 10 int FC scores (acc + int32 bias) per digit
+        pred   : argmax digit
+    """
     cw  = [s8(weights[i]) for i in range(9)]                # 9 conv weights (signed)
     fcw = [s8(weights[9 + i]) for i in range(1690)]         # 1690 FC weights (signed)
-
     px = lambda y, x: img[y*28 + x]                         # unsigned pixel
 
     # --- conv 3x3 valid -> 26x26, quantized exactly like mac_array_3x3.v ---
@@ -78,6 +88,21 @@ def main():
         acc = sum(pooled[i] * fcw[d*169 + i] for i in range(169))
         scores.append(acc + biases[d + 1])   # bias.hex idx 1..10 == digits 0..9
     pred = max(range(10), key=lambda d: scores[d])
+
+    conv_flat = [conv[y][x] for y in range(26) for x in range(26)]
+    return {"conv": conv_flat, "pooled": pooled, "scores": scores, "pred": pred}
+
+
+def main():
+    idx = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    weights, biases = load_model()
+    imgs = load_hex(os.path.join(DATA, "images_batch.hex"))
+
+    img = imgs[idx*784 : idx*784 + 784]                     # 28x28 unsigned
+    out = run_pipeline(img, weights, biases)
+    conv_flat, pooled, scores, pred = out["conv"], out["pooled"], out["scores"], out["pred"]
+    conv = [conv_flat[y*26:(y+1)*26] for y in range(26)]    # reshape for the dump below
+    fcw = [s8(weights[9 + i]) for i in range(1690)]         # 1690 FC weights (for dumps)
     labels = load_labels(os.path.join(DATA, "images_batch.hex"))
     label = labels.get(idx)
 

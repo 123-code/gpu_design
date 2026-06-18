@@ -3,107 +3,291 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tiny-gpu · draw a digit</title>
+<title>tiny-gpu · a GPU running a CNN on an FPGA</title>
 <style>
   :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
   body { margin:0; font-family:-apple-system,Segoe UI,Roboto,sans-serif; background:#0b0d12;
-         color:#e6e9ef; display:flex; flex-direction:column; align-items:center; gap:18px; padding:28px; }
-  h1 { font-size:18px; font-weight:600; margin:0; letter-spacing:.2px; }
-  .sub { color:#8b93a7; font-size:13px; margin-top:-10px; }
-  .row { display:flex; gap:24px; align-items:center; flex-wrap:wrap; justify-content:center; }
+         color:#e6e9ef; display:flex; flex-direction:column; align-items:center; gap:16px; padding:26px 18px 44px; }
+  h1 { font-size:19px; font-weight:600; margin:0; letter-spacing:.2px; }
+  .sub { color:#8b93a7; font-size:13px; margin-top:-8px; text-align:center; }
+  .sub b { color:#cdd3e0; font-weight:600; }
+
+  /* mode toggle */
+  .modes { display:flex; gap:6px; background:#11151f; border:1px solid #232838; border-radius:11px; padding:4px; }
+  .modes button { font:inherit; font-size:13px; padding:7px 16px; border-radius:8px; border:0;
+                  background:transparent; color:#8b93a7; cursor:pointer; }
+  .modes button.on { background:#2563eb; color:#fff; }
+  .modes button:disabled { color:#444b5e; cursor:not-allowed; }
+
+  .stage-hint { font-size:12px; color:#8b93a7; min-height:16px; text-align:center; }
+
+  /* input area (live = draw pad, gallery = thumbnails) */
+  .inputzone { display:flex; gap:22px; align-items:center; flex-wrap:wrap; justify-content:center; }
   #pad { background:#000; border-radius:14px; border:1px solid #232838; cursor:crosshair; touch-action:none; }
-  .panel { display:flex; flex-direction:column; align-items:center; gap:10px; }
-  #preview { width:112px; height:112px; image-rendering:pixelated; background:#000; border-radius:8px; border:1px solid #232838; }
-  .label { font-size:11px; color:#8b93a7; text-transform:uppercase; letter-spacing:.08em; }
-  .result { font-size:96px; font-weight:700; line-height:1; min-width:90px; text-align:center;
-            color:#7cf3a0; }
-  .result.idle { color:#2c3346; }
-  .btns { display:flex; gap:10px; }
-  button { font:inherit; font-size:14px; padding:10px 18px; border-radius:10px; border:1px solid #2a3145;
-           background:#161b27; color:#e6e9ef; cursor:pointer; }
-  button.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
-  button:active { transform:translateY(1px); }
-  #status { font-size:12px; color:#8b93a7; min-height:16px; }
+  .btns { display:flex; flex-direction:column; gap:10px; }
+  button.act { font:inherit; font-size:14px; padding:10px 18px; border-radius:10px; border:1px solid #2a3145;
+               background:#161b27; color:#e6e9ef; cursor:pointer; }
+  button.act.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
+  button.act:active { transform:translateY(1px); }
+  .gallery { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; max-width:680px; }
+  .gallery .thumb { width:64px; height:64px; image-rendering:pixelated; background:#000; border-radius:8px;
+                    border:2px solid #232838; cursor:pointer; }
+  .gallery .thumb.on { border-color:#2563eb; }
+
+  /* the pipeline strip */
+  .pipe { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:center;
+          background:#0e121b; border:1px solid #1d2330; border-radius:16px; padding:20px 18px; }
+  .node { display:flex; flex-direction:column; align-items:center; gap:8px; opacity:0; transform:translateY(8px);
+          transition:opacity .35s ease, transform .35s ease; }
+  .node.show { opacity:1; transform:none; }
+  .node .cap { font-size:10.5px; color:#8b93a7; text-transform:uppercase; letter-spacing:.07em; text-align:center; }
+  .node .sz  { font-size:10px; color:#5b647a; }
+  .arrow { color:#39425a; font-size:22px; padding:0 2px; align-self:flex-start; margin-top:34px; }
+  canvas.map { image-rendering:pixelated; background:#000; border-radius:8px; border:1px solid #232838; }
+  #c_in   { width:84px; height:84px; }
+  #c_conv { width:104px; height:104px; }
+  #c_pool { width:84px;  height:84px; }
+
+  /* FC bars */
+  .fc { display:flex; flex-direction:column; gap:3px; width:150px; }
+  .fcrow { display:flex; align-items:center; gap:6px; font-size:11px; color:#9aa3b6; }
+  .fcrow .d { width:9px; text-align:right; color:#6b7488; }
+  .fctrack { flex:1; height:9px; background:#161b27; border-radius:5px; overflow:hidden; }
+  .fcfill { height:100%; width:0; background:#39425a; border-radius:5px; transition:width .5s ease; }
+  .fcrow.win .fcfill { background:#7cf3a0; }
+  .fcrow.win { color:#cdeeda; }
+
+  /* result */
+  .result { display:flex; flex-direction:column; align-items:center; gap:4px; min-width:96px; }
+  .digit { font-size:92px; font-weight:700; line-height:1; color:#7cf3a0; }
+  .digit.idle { color:#2c3346; }
+  .badge { font-size:11px; color:#7cf3a0; background:#13241a; border:1px solid #1f4530; border-radius:20px;
+           padding:3px 10px; opacity:0; transition:opacity .4s ease; }
+  .badge.show { opacity:1; }
+  .src { font-size:10px; color:#5b647a; margin-top:2px; }
+
+  footer { color:#5b647a; font-size:11.5px; text-align:center; max-width:560px; line-height:1.5; }
+  footer code { color:#8b93a7; }
 </style>
 </head>
 <body>
-  <h1>Draw a digit → the FPGA reads it</h1>
-  <div class="sub">tiny-gpu on a Tang Nano 20K runs the whole CNN on-chip</div>
+  <h1>A GPU running a CNN — on a Tang Nano 20K FPGA</h1>
+  <div class="sub">Draw a digit. The on-chip SIMT GPU runs <b>Conv → ReLU → MaxPool → FC → argmax</b>
+    and reads it back. Watch each stage compute.</div>
 
-  <div class="row">
+  <div class="modes">
+    <button id="mLive" class="on">● Live (FPGA)</button>
+    <button id="mGallery">Gallery</button>
+  </div>
+  <div id="hint" class="stage-hint">draw a single digit (0–9), thick and centered</div>
+
+  <!-- INPUT ZONE -->
+  <div id="livezone" class="inputzone">
     <canvas id="pad" width="280" height="280"></canvas>
-    <div class="panel">
-      <span class="label">what the GPU sees (28×28)</span>
-      <canvas id="preview" width="28" height="28"></canvas>
+    <div class="btns">
+      <button id="go" class="act primary">Recognize ▸</button>
+      <button id="clear" class="act">Clear</button>
     </div>
-    <div class="panel">
-      <span class="label">prediction</span>
-      <div id="out" class="result idle">–</div>
+  </div>
+  <div id="galleryzone" class="gallery" style="display:none"></div>
+
+  <!-- PIPELINE STRIP -->
+  <div class="pipe" id="pipe">
+    <div class="node" id="n_in">
+      <canvas id="c_in" class="map" width="28" height="28"></canvas>
+      <div class="cap">input</div><div class="sz">28×28</div>
+    </div>
+    <div class="arrow">▸</div>
+    <div class="node" id="n_conv">
+      <canvas id="c_conv" class="map" width="26" height="26"></canvas>
+      <div class="cap">conv 3×3 + relu</div><div class="sz">26×26 · MAC coproc</div>
+    </div>
+    <div class="arrow">▸</div>
+    <div class="node" id="n_pool">
+      <canvas id="c_pool" class="map" width="13" height="13"></canvas>
+      <div class="cap">max-pool 2×2</div><div class="sz">13×13</div>
+    </div>
+    <div class="arrow">▸</div>
+    <div class="node" id="n_fc">
+      <div class="fc" id="fc"></div>
+      <div class="cap">fully-connected</div><div class="sz">169 → 10</div>
+    </div>
+    <div class="arrow">▸</div>
+    <div class="node" id="n_out">
+      <div class="result">
+        <div id="digit" class="digit idle">–</div>
+        <div id="badge" class="badge">on-chip</div>
+      </div>
+      <div class="cap">argmax</div>
     </div>
   </div>
 
-  <div class="btns">
-    <button id="go" class="primary">Recognize</button>
-    <button id="clear">Clear</button>
-  </div>
-  <div id="status">draw a single digit (0–9), thick and centered</div>
+  <footer>
+    Digit and timing are read back from the <b>actual FPGA</b> over UART.
+    Stage maps (conv / pool / FC) are the <b>bit-exact reference</b> of the same RTL
+    (verified equal in simulation: conv 676/676, pool 169/169).
+    Kernel: <code>software/mnist_full.asm</code>.
+  </footer>
 
 <script>
-const pad = document.getElementById('pad'), pctx = pad.getContext('2d');
-const prev = document.getElementById('preview'), prevctx = prev.getContext('2d');
-const out = document.getElementById('out'), statusEl = document.getElementById('status');
+const $ = id => document.getElementById(id);
+const pad = $('pad'), pctx = pad.getContext('2d');
+const hint = $('hint'), digitEl = $('digit'), badgeEl = $('badge');
 
+// ---------- colormap: dark teal -> bright green/white (intensity 0..255) ----------
+function ramp(v){ const t = v/255;
+  return [ (t*t*210)|0, (40 + t*205)|0, (55 + t*120*(1-t)+t*t*180)|0 ]; }
+
+function drawMap(canvas, data, w, h){
+  const ctx = canvas.getContext('2d'); const img = ctx.createImageData(w, h);
+  for(let i=0;i<w*h;i++){ const [r,g,b]=ramp(data[i]||0);
+    img.data[i*4]=r; img.data[i*4+1]=g; img.data[i*4+2]=b; img.data[i*4+3]=255; }
+  ctx.putImageData(img, 0, 0);
+}
+function drawInput(pixels){            // pixels: 784 grayscale (white digit on black)
+  const ctx = $('c_in').getContext('2d'); const img = ctx.createImageData(28,28);
+  for(let i=0;i<784;i++){ const v=pixels[i]||0; img.data[i*4]=v; img.data[i*4+1]=v; img.data[i*4+2]=v; img.data[i*4+3]=255; }
+  ctx.putImageData(img,0,0);
+}
+
+// ---------- FC bars ----------
+function buildFC(){ const fc=$('fc'); fc.innerHTML='';
+  for(let d=0; d<10; d++){ const row=document.createElement('div'); row.className='fcrow'; row.id='fc'+d;
+    row.innerHTML = `<span class="d">${d}</span><span class="fctrack"><span class="fcfill"></span></span>`;
+    fc.appendChild(row); } }
+function fillFC(scores, pred){
+  const mn=Math.min(...scores), mx=Math.max(...scores), span=(mx-mn)||1;
+  for(let d=0; d<10; d++){ const row=$('fc'+d);
+    row.classList.toggle('win', d===pred);
+    row.querySelector('.fcfill').style.width = Math.round((scores[d]-mn)/span*100)+'%'; }
+}
+
+// ---------- staged reveal: input -> conv -> pool -> fc -> digit ----------
+const NODES=['n_in','n_conv','n_pool','n_fc','n_out'];
+function resetPipe(){ NODES.forEach(n=>$(n).classList.remove('show'));
+  badgeEl.classList.remove('show'); digitEl.textContent='–'; digitEl.classList.add('idle');
+  for(let d=0;d<10;d++){ const r=$('fc'+d); r.classList.remove('win'); r.querySelector('.fcfill').style.width='0'; } }
+
+// data: {input?:784, conv:676, pooled:169, scores:10, digit, ms, cycles, ref_pred}
+function play(data){
+  resetPipe();
+  if(data.input) drawInput(data.input);
+  drawMap($('c_conv'), data.conv, 26, 26);
+  drawMap($('c_pool'), data.pooled, 13, 13);
+  const pred = (data.ref_pred!=null) ? data.ref_pred : data.digit;
+  const steps = [
+    ()=> $('n_in').classList.add('show'),
+    ()=> $('n_conv').classList.add('show'),
+    ()=> $('n_pool').classList.add('show'),
+    ()=>{ $('n_fc').classList.add('show'); fillFC(data.scores, pred); },
+    ()=>{ $('n_out').classList.add('show');
+          digitEl.textContent = (data.digit!=null? data.digit : pred);
+          digitEl.classList.remove('idle');
+          badgeEl.textContent = data.ms!=null ? `on-chip · ${data.ms} ms @ 27 MHz` : 'bit-exact reference';
+          badgeEl.classList.add('show'); },
+  ];
+  steps.forEach((fn,i)=> setTimeout(fn, 160*i + 120));
+  hint.textContent = data.ms!=null
+    ? `computed entirely on the FPGA in ${data.ms} ms (${(data.cycles||0).toLocaleString()} cycles @ 27 MHz)`
+    : 'bit-exact reference of the on-chip pipeline — run `make record` with the board for real silicon timing';
+}
+
+// ================= DRAWING (live mode) =================
 function clearPad(){ pctx.fillStyle='#000'; pctx.fillRect(0,0,280,280);
-  prevctx.fillStyle='#000'; prevctx.fillRect(0,0,28,28);
-  out.textContent='–'; out.classList.add('idle'); statusEl.textContent='draw a single digit (0–9)'; }
-clearPad();
-
-// --- drawing (white stroke on black) ---
-let drawing=false, lastX=0, lastY=0;
+  resetPipe(); hint.textContent='draw a single digit (0–9), thick and centered'; }
+let drawing=false,lastX=0,lastY=0;
 function pos(e){ const r=pad.getBoundingClientRect(); const t=e.touches?e.touches[0]:e;
-  return [(t.clientX-r.left)*pad.width/r.width, (t.clientY-r.top)*pad.height/r.height]; }
+  return [(t.clientX-r.left)*pad.width/r.width,(t.clientY-r.top)*pad.height/r.height]; }
 function start(e){ drawing=true; [lastX,lastY]=pos(e); e.preventDefault(); }
-function move(e){ if(!drawing) return; const [x,y]=pos(e);
+function move(e){ if(!drawing)return; const [x,y]=pos(e);
   pctx.strokeStyle='#fff'; pctx.lineWidth=22; pctx.lineCap='round'; pctx.lineJoin='round';
   pctx.beginPath(); pctx.moveTo(lastX,lastY); pctx.lineTo(x,y); pctx.stroke(); [lastX,lastY]=[x,y]; e.preventDefault(); }
 function end(){ drawing=false; }
-pad.addEventListener('mousedown',start); pad.addEventListener('mousemove',move);
-window.addEventListener('mouseup',end);
+pad.addEventListener('mousedown',start); pad.addEventListener('mousemove',move); window.addEventListener('mouseup',end);
 pad.addEventListener('touchstart',start); pad.addEventListener('touchmove',move); pad.addEventListener('touchend',end);
 
-// --- MNIST-style preprocessing: bounding box -> fit in 20x20 -> center in 28x28 ---
+// MNIST-style: bounding box -> fit in 20x20 -> center in 28x28
 function to28(){
-  const src = pctx.getImageData(0,0,280,280).data;
-  let minX=280,minY=280,maxX=-1,maxY=-1;
-  for(let y=0;y<280;y++) for(let x=0;x<280;x++){
-    if(src[(y*280+x)*4] > 40){ if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
-  }
-  prevctx.fillStyle='#000'; prevctx.fillRect(0,0,28,28);
-  if(maxX<0) return null;                                  // nothing drawn
-  const w=maxX-minX+1, h=maxY-minY+1, scale=20/Math.max(w,h);
-  const dw=Math.round(w*scale), dh=Math.round(h*scale);
-  const dx=Math.round((28-dw)/2), dy=Math.round((28-dh)/2);
-  prevctx.imageSmoothingEnabled=true;
-  prevctx.drawImage(pad, minX,minY,w,h, dx,dy,dw,dh);      // crop+scale+center, antialiased
-  const px=prevctx.getImageData(0,0,28,28).data, pixels=new Array(784);
-  for(let i=0;i<784;i++) pixels[i]=px[i*4];                // red channel == intensity (white on black)
+  const src=pctx.getImageData(0,0,280,280).data; let minX=280,minY=280,maxX=-1,maxY=-1;
+  for(let y=0;y<280;y++)for(let x=0;x<280;x++){ if(src[(y*280+x)*4]>40){
+    if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; } }
+  if(maxX<0) return null;
+  const tmp=document.createElement('canvas'); tmp.width=28; tmp.height=28; const tctx=tmp.getContext('2d');
+  tctx.fillStyle='#000'; tctx.fillRect(0,0,28,28);
+  const w=maxX-minX+1,h=maxY-minY+1,scale=20/Math.max(w,h);
+  const dw=Math.round(w*scale),dh=Math.round(h*scale),dx=Math.round((28-dw)/2),dy=Math.round((28-dh)/2);
+  tctx.imageSmoothingEnabled=true; tctx.drawImage(pad,minX,minY,w,h,dx,dy,dw,dh);
+  const px=tctx.getImageData(0,0,28,28).data, pixels=new Array(784);
+  for(let i=0;i<784;i++) pixels[i]=px[i*4];
   return pixels;
 }
 
-document.getElementById('clear').onclick = clearPad;
-document.getElementById('go').onclick = async () => {
+$('clear').onclick = clearPad;
+$('go').onclick = async () => {
   const pixels = to28();
-  if(!pixels){ statusEl.textContent='draw something first'; return; }
-  statusEl.textContent='sending 784 bytes to the FPGA…'; out.textContent='…'; out.classList.add('idle');
+  if(!pixels){ hint.textContent='draw something first'; return; }
+  hint.textContent='streaming 784 bytes to the FPGA…';
+  digitEl.textContent='…'; digitEl.classList.add('idle');
   try {
     const r = await fetch('/predict',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({pixels})});
     const j = await r.json();
     if(j.error) throw new Error(j.error);
-    out.textContent = j.digit; out.classList.remove('idle');
-    statusEl.textContent = 'the GPU computed this entirely on-chip';
-  } catch(e){ out.textContent='!'; statusEl.textContent='error: '+e.message; }
+    j.input = pixels;
+    play(j);
+  } catch(e){ digitEl.textContent='!'; hint.textContent='error: '+e.message; }
 };
+
+// ================= GALLERY (no board needed) =================
+let galleryLoaded=false;
+async function loadGallery(){
+  if(galleryLoaded) return; galleryLoaded=true;
+  const zone=$('galleryzone');
+  try {
+    const idx = await (await fetch('recordings/index.json')).json();
+    zone.innerHTML='';
+    for(const run of idx.runs){
+      const c=document.createElement('canvas'); c.width=28; c.height=28; c.className='thumb';
+      const run_data = await (await fetch('recordings/'+run.file)).json();
+      drawInputTo(c, run_data.input || run_data.thumb);
+      c.title = run.label!=null ? `label ${run.label}` : '';
+      c.onclick = ()=>{ [...zone.children].forEach(t=>t.classList.remove('on')); c.classList.add('on'); play(run_data); };
+      zone.appendChild(c);
+    }
+    if(idx.runs.length){ zone.children[0].click(); }
+    else hint.textContent='no recordings yet — run demo/record.py to capture some';
+  } catch(e){ zone.innerHTML=''; hint.textContent='no recordings found (recordings/index.json)'; }
+}
+function drawInputTo(canvas, pixels){
+  const ctx=canvas.getContext('2d'); const img=ctx.createImageData(28,28);
+  for(let i=0;i<784;i++){ const v=(pixels&&pixels[i])||0; img.data[i*4]=v; img.data[i*4+1]=v; img.data[i*4+2]=v; img.data[i*4+3]=255; }
+  ctx.putImageData(img,0,0);
+}
+
+// ================= MODE SWITCHING =================
+function setMode(m){
+  const live = m==='live';
+  $('mLive').classList.toggle('on', live); $('mGallery').classList.toggle('on', !live);
+  $('livezone').style.display = live ? 'flex' : 'none';
+  $('galleryzone').style.display = live ? 'none' : 'flex';
+  resetPipe();
+  if(live){ clearPad(); } else { loadGallery(); }
+}
+$('mLive').onclick = ()=> setMode('live');
+$('mGallery').onclick = ()=> setMode('gallery');
+
+// pick the initial mode: Live only if a board is actually present
+buildFC();
+(async function init(){
+  clearPad();
+  try {
+    const h = await (await fetch('/health')).json();
+    if(h.board){ setMode('live'); return; }
+  } catch(e){ /* no server -> static hosting */ }
+  $('mLive').disabled = true; $('mLive').title='no FPGA detected — start demo/server.py with the board attached';
+  setMode('gallery');
+})();
 </script>
 </body>
 </html>

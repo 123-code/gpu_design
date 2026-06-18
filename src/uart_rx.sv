@@ -1,4 +1,6 @@
+//force the compiler to throw a hard error for a connection that is wrong
 `default_nettype none
+//set the time scale for the simulation
 `timescale 1ns/1ns
 
 // UART receiver, 8N1. Samples each bit at its midpoint.
@@ -9,10 +11,10 @@ module uart_rx #(
     parameter BAUD_RATE = 115200
 ) (
     input  wire       clk,
-    input  wire       reset,     // active-high
-    input  wire       rx_in,     // serial line from the PC
-    output reg  [7:0] rx_byte,
-    output reg        rx_valid   // 1-cycle pulse when rx_byte is fresh
+    input  wire       reset,     // return to waiting state
+    input  wire       rx_in,     // copper wire coming from the PC
+    output reg  [7:0] rx_byte, // 8 bits of data from the PC
+    output reg        rx_valid   //sits at 0, pulses when receiver assembles 8 bits from rx_in, fr i clock cycle,dma grabs that data
 );
     localparam integer BIT_TICK  = CLK_FREQ / BAUD_RATE; // 234 @ 27 MHz/115200
     localparam integer HALF_TICK = BIT_TICK / 2;
@@ -20,7 +22,7 @@ module uart_rx #(
     localparam IDLE = 2'b00, START = 2'b01, DATA = 2'b10, STOP = 2'b11;
 
     reg [1:0]  state;
-    reg [15:0] tick;
+    reg [15:0] tick; //sfa estandard size, so timer soesnt overflow if baud rate is slower
     reg [2:0]  bit_index;
     reg [7:0]  shift_reg;
 

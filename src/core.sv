@@ -189,7 +189,8 @@ module core #(
     localparam UPDATE_STATE = 3'b110;
     // Pixel buffer only: the 9 conv weights are CONSTANT (part of the trained
     // model) and baked below, so a conv window just pushes 9 pixels with MACL.
-    reg  [7:0] mac_buf [0:8];
+    reg  [7:0] mac_buf [0:7];
+    reg  [7:0] weight_buf [0:7]; // memory buffer 8 slots, 8 bits each. 
     reg  [3:0] mac_wptr;
     wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11)
                           && !decoded_fc_read;
@@ -198,35 +199,30 @@ module core #(
         if (reset) begin
             mac_wptr <= 4'd0;
         end else if (core_state == UPDATE_STATE) begin
-            if (decoded_mac_load && mac_wptr < 4'd9) begin
-                mac_buf[mac_wptr] <= rs_bus[0];     // push a pixel
+            if (decoded_mac_load && mac_wptr < 4'd8) begin
+                mac_buf[mac_wptr] <= rs_bus[0];        // push a pixel from rs register
+                weight_buf[mac_wptr] <= rt_bus[0];     // push a weight from rt register we now load one weight and one pixel simultaneously
                 mac_wptr <= mac_wptr + 4'd1;
             end else if (mac_fire) begin
-                mac_wptr <= 4'd0;                   // consumed -> ready for next window
+                mac_wptr <= 4'd0;                      // consumed -> ready for next window
             end
         end
     end
 
-    // Baked 3x3 conv weights (signed int8), loaded at synthesis from the trained
-    // model. Override with -DCONV_W_HEX="..." in sim.
-`ifndef CONV_W_HEX
-    `define CONV_W_HEX "/Users/joseignacio/tiny-gpu-fpga/software/mnist_data/conv_weights.hex"
-`endif
-    reg signed [7:0] conv_w [0:8];
-    initial $readmemh(`CONV_W_HEX, conv_w);
 
-    wire [7:0] mac_result;
-    mac_array_3x3 u_mac (
+
+    wire [31:0] vector_result_32;
+    wire [7:0] mac_result = vector_result_32[7:0]; // Taking the lowest 8 bits for now
+    
+    vector_mac u_mac (
         .clk(clk),
         .rst_n(~reset),
         .valid_in(1'b1),
-        .px00(mac_buf[0]), .px01(mac_buf[1]),  .px02(mac_buf[2]),
-        .px10(mac_buf[3]), .px11(mac_buf[4]),  .px12(mac_buf[5]),
-        .px20(mac_buf[6]), .px21(mac_buf[7]),  .px22(mac_buf[8]),
-        .w00(conv_w[0]),   .w01(conv_w[1]),    .w02(conv_w[2]),
-        .w10(conv_w[3]),   .w11(conv_w[4]),    .w12(conv_w[5]),
-        .w20(conv_w[6]),   .w21(conv_w[7]),    .w22(conv_w[8]),
-        .pixel_out(mac_result),
+        .px0(mac_buf[0]), .px1(mac_buf[1]), .px2(mac_buf[2]), .px3(mac_buf[3]),
+        .px4(mac_buf[4]), .px5(mac_buf[5]), .px6(mac_buf[6]), .px7(mac_buf[7]),
+        .w0(weight_buf[0]), .w1(weight_buf[1]), .w2(weight_buf[2]), .w3(weight_buf[3]),
+        .w4(weight_buf[4]), .w5(weight_buf[5]), .w6(weight_buf[6]), .w7(weight_buf[7]),
+        .result_out(vector_result_32),
         .valid_out()
     );
 
@@ -236,7 +232,9 @@ module core #(
     // Wide (32-bit) accumulator for the fully-connected layer: thread 0 drives
     // it (SIMT-uniform). FCLR/FMAC act in UPDATE; FRD reads it back through the
     // MAC writeback mux (mux==11 with decoded_fc_read selecting fc over conv).
-    wire [7:0] fc_result;
+    wire [31:0] fc_result_32;
+    wire [7:0] fc_result = fc_result_32[7:0]; // Taking the lowest 8 bits for now
+    
     fc_mac u_fc (
         .clk(clk),
         .reset(reset),
@@ -245,7 +243,8 @@ module core #(
         .farg  (decoded_fc_arg   && (core_state == UPDATE_STATE)),
         .px(rs_bus[0]),
         .wt(rt_bus[0]),
-        .result(fc_result)
+        .bias_in({{24{rt_bus[0][7]}}, rt_bus[0]}), // Sign-extend, padding 8-bit bias to 32-bit bd sending to fc mac vector unit
+        .result(fc_result_32)
     );
 
     // Writeback source for the shared MAC mux: conv MAC normally, FC readout on FRD.

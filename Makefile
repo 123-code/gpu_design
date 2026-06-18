@@ -5,11 +5,17 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim build flash flash-persist asm clean
+.PHONY: sim build flash flash-persist asm demo record clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
 	$(VVP) gpu_sim
+
+demo:           ## Serve the draw-a-digit web demo at http://localhost:8000
+	python3 demo/server.py
+
+record:         ## Capture FPGA runs into demo/recordings/ for the Gallery (use --offline for no board)
+	python3 demo/record.py
 
 asm:            ## Re-assemble software/test_kernel.asm -> software/kernel.hex
 	cd software && cargo run --quiet

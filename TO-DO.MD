@@ -1,0 +1,1 @@
+To make full use of the 32-bit output in the future, you would need to add new assembly instructions to your ISA—something like READ_HIGH, READ_MID—so the software can spend 4 clock cycles reading the 4 bytes of the 32-bit answer into its 8-bit registers

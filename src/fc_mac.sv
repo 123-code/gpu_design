@@ -22,7 +22,7 @@
 // The 9x8 product maps to a DSP block.
 // ============================================================================
 module fc_mac #(
-    parameter BIAS_HEX = "/Users/joseignacio/tiny-gpu-fpga/software/mnist_data/bias.hex"
+
 ) (
     input  wire        clk,
     input  wire        reset,            // active-high
@@ -32,43 +32,35 @@ module fc_mac #(
     input  wire        farg,             // FARG : finalize current digit
     input  wire [7:0]  px,               // pixel  (unsigned 0..255)
     input  wire [7:0]  wt,               // weight (signed int8)
+    input  wire signed [31:0] bias_in,   // receiving the bias 
 
-    output wire [7:0]  result            // FBEST readout: predicted digit (best_idx)
+    output wire signed [31:0] result
 );
     reg signed [31:0] acc;
-    reg signed [31:0] best;
-    reg [3:0]         digit;             // digit currently being finalized (0..9)
-    reg [3:0]         best_idx;
+    reg signed [31:0] final_score; // Holds the final answer so software can read it safely
 
     // int32 bias ROM (bias.hex: index 0 unused, 1..10 = digit 0..9).
-    reg signed [31:0] bias_rom [0:10];
-    initial $readmemh(BIAS_HEX, bias_rom);
+
 
     // px unsigned (zero-extend), wt signed int8 (sign-extend) -> signed product.
     wire signed [8:0]  px_s = $signed({1'b0, px});
     wire signed [8:0]  wt_s = $signed({wt[7], wt});
     wire signed [31:0] prod = px_s * wt_s;
 
-    // This digit's full score = accumulated dot product + its int32 bias.
-    wire signed [31:0] score = acc + bias_rom[digit + 4'd1];
+    // This digit's full score = accumulated dot product + bias.
+    wire signed [31:0] score = acc + bias_in;
 
     always @(posedge clk) begin
         if (reset || frst) begin
-            acc      <= 32'sd0;
-            best     <= 32'sh80000000;   // most negative -> digit 0 always adopts
-            digit    <= 4'd0;
-            best_idx <= 4'd0;
+            acc         <= 32'sd0;
+            final_score <= 32'sd0;
         end else if (mac_en) begin
             acc <= acc + prod;
         end else if (farg) begin
-            if (digit == 4'd0 || score > best) begin
-                best     <= score;
-                best_idx <= digit;
-            end
-            digit <= digit + 4'd1;
-            acc   <= 32'sd0;             // ready for the next digit's products
+            final_score <= score;        // Latch the final score (acc + bias)
+            acc         <= 32'sd0;       // Reset acc for the next calculation
         end
     end
 
-    assign result = {4'd0, best_idx};
+    assign result = final_score;
 endmodule

@@ -1,0 +1,1165 @@
+{
+  "creator": "Yosys 0.64 (git sha1 d8dab5b32666564eca8e18f412973853ce006e61, clang++ 21.0.0 -fPIC -O3)",
+  "modules": {
+    "scheduler": {
+      "attributes": {
+        "dynports": "00000000000000000000000000000001",
+        "top": "00000000000000000000000000000001",
+        "src": "build/design.v:1315.1-1376.10"
+      },
+      "parameter_default_values": {
+        "THREADS_PER_BLOCK": "00000000000000000000000000000100"
+      },
+      "ports": {
+        "clk": {
+          "direction": "input",
+          "bits": [ 2 ]
+        },
+        "reset": {
+          "direction": "input",
+          "bits": [ 3 ]
+        },
+        "start": {
+          "direction": "input",
+          "bits": [ 4 ]
+        },
+        "decoded_ret": {
+          "direction": "input",
+          "bits": [ 5 ]
+        },
+        "lsu_state[0]": {
+          "direction": "input",
+          "bits": [ 6 ]
+        },
+        "lsu_state[1]": {
+          "direction": "input",
+          "offset": 1,
+          "bits": [ 7 ]
+        },
+        "lsu_state[2]": {
+          "direction": "input",
+          "offset": 2,
+          "bits": [ 8 ]
+        },
+        "lsu_state[3]": {
+          "direction": "input",
+          "offset": 3,
+          "bits": [ 9 ]
+        },
+        "lsu_state[4]": {
+          "direction": "input",
+          "offset": 4,
+          "bits": [ 10 ]
+        },
+        "lsu_state[5]": {
+          "direction": "input",
+          "offset": 5,
+          "bits": [ 11 ]
+        },
+        "lsu_state[6]": {
+          "direction": "input",
+          "offset": 6,
+          "bits": [ 12 ]
+        },
+        "lsu_state[7]": {
+          "direction": "input",
+          "offset": 7,
+          "bits": [ 13 ]
+        },
+        "core_state[0]": {
+          "direction": "output",
+          "bits": [ 14 ]
+        },
+        "core_state[1]": {
+          "direction": "output",
+          "offset": 1,
+          "bits": [ 15 ]
+        },
+        "core_state[2]": {
+          "direction": "output",
+          "offset": 2,
+          "bits": [ 16 ]
+        },
+        "done": {
+          "direction": "output",
+          "bits": [ 17 ]
+        }
+      },
+      "cells": {
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1034": {
+          "hide_name": 1,
+          "type": "$_NOT_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 16 ],
+            "Y": [ 18 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1035": {
+          "hide_name": 1,
+          "type": "$_NOT_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 14 ],
+            "Y": [ 19 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1036": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 15 ],
+            "B": [ 14 ],
+            "Y": [ 20 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1037": {
+          "hide_name": 1,
+          "type": "$_NOT_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 20 ],
+            "Y": [ 21 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1038": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 16 ],
+            "B": [ 21 ],
+            "Y": [ 22 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1039": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 18 ],
+            "B": [ 20 ],
+            "Y": [ 23 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1040": {
+          "hide_name": 1,
+          "type": "$_XOR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 8 ],
+            "B": [ 9 ],
+            "Y": [ 24 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1041": {
+          "hide_name": 1,
+          "type": "$_XOR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 12 ],
+            "B": [ 13 ],
+            "Y": [ 25 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1042": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 24 ],
+            "B": [ 25 ],
+            "Y": [ 26 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1043": {
+          "hide_name": 1,
+          "type": "$_NOT_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 26 ],
+            "Y": [ 27 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1044": {
+          "hide_name": 1,
+          "type": "$_XOR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 6 ],
+            "B": [ 7 ],
+            "Y": [ 28 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1045": {
+          "hide_name": 1,
+          "type": "$_XOR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 10 ],
+            "B": [ 11 ],
+            "Y": [ 29 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1046": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 28 ],
+            "B": [ 29 ],
+            "Y": [ 30 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1047": {
+          "hide_name": 1,
+          "type": "$_NOT_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 30 ],
+            "Y": [ 31 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1048": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 27 ],
+            "B": [ 31 ],
+            "Y": [ 32 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1049": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 3 ],
+            "B": [ 23 ],
+            "Y": [ 33 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1050": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 32 ],
+            "B": [ 33 ],
+            "Y": [ 34 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1051": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 22 ],
+            "B": [ 34 ],
+            "Y": [ 35 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1052": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 18 ],
+            "B": [ 4 ],
+            "Y": [ 36 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1053": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 15 ],
+            "B": [ 36 ],
+            "Y": [ 37 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1054": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 19 ],
+            "B": [ 37 ],
+            "Y": [ 38 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1055": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 35 ],
+            "B": [ 38 ],
+            "Y": [ 39 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1056": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 15 ],
+            "B": [ 14 ],
+            "Y": [ 40 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1057": {
+          "hide_name": 1,
+          "type": "$_XOR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 15 ],
+            "B": [ 14 ],
+            "Y": [ 41 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1058": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 14 ],
+            "B": [ 5 ],
+            "Y": [ 42 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1059": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 18 ],
+            "B": [ 42 ],
+            "Y": [ 43 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1060": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 41 ],
+            "B": [ 43 ],
+            "Y": [ 44 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1061": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 41 ],
+            "B": [ 42 ],
+            "Y": [ 45 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1062": {
+          "hide_name": 1,
+          "type": "$_MUX_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "S": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 40 ],
+            "B": [ 45 ],
+            "S": [ 16 ],
+            "Y": [ 46 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1063": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 35 ],
+            "B": [ 46 ],
+            "Y": [ 47 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1064": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 16 ],
+            "B": [ 40 ],
+            "Y": [ 48 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1065": {
+          "hide_name": 1,
+          "type": "$_NOT_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 48 ],
+            "Y": [ 49 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1066": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 16 ],
+            "B": [ 4 ],
+            "Y": [ 50 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1067": {
+          "hide_name": 1,
+          "type": "$_OR_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 20 ],
+            "B": [ 50 ],
+            "Y": [ 51 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1068": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 49 ],
+            "B": [ 51 ],
+            "Y": [ 52 ]
+          }
+        },
+        "$abc$1033$auto$blifparse.cc:397:parse_blif$1069": {
+          "hide_name": 1,
+          "type": "$_AND_",
+          "parameters": {
+          },
+          "attributes": {
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 34 ],
+            "B": [ 52 ],
+            "Y": [ 53 ]
+          }
+        },
+        "$auto$ff.cc:337:slice$716": {
+          "hide_name": 1,
+          "type": "$_SDFFE_PP0P_",
+          "parameters": {
+          },
+          "attributes": {
+            "src": "build/design.v:1341.2-1375.6"
+          },
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "E": "input",
+            "Q": "output",
+            "R": "input"
+          },
+          "connections": {
+            "C": [ 2 ],
+            "D": [ 39 ],
+            "E": [ 53 ],
+            "Q": [ 14 ],
+            "R": [ 3 ]
+          }
+        },
+        "$auto$ff.cc:337:slice$717": {
+          "hide_name": 1,
+          "type": "$_SDFFE_PP0P_",
+          "parameters": {
+          },
+          "attributes": {
+            "src": "build/design.v:1341.2-1375.6"
+          },
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "E": "input",
+            "Q": "output",
+            "R": "input"
+          },
+          "connections": {
+            "C": [ 2 ],
+            "D": [ 44 ],
+            "E": [ 53 ],
+            "Q": [ 15 ],
+            "R": [ 3 ]
+          }
+        },
+        "$auto$ff.cc:337:slice$718": {
+          "hide_name": 1,
+          "type": "$_SDFFE_PP0P_",
+          "parameters": {
+          },
+          "attributes": {
+            "src": "build/design.v:1341.2-1375.6"
+          },
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "E": "input",
+            "Q": "output",
+            "R": "input"
+          },
+          "connections": {
+            "C": [ 2 ],
+            "D": [ 47 ],
+            "E": [ 53 ],
+            "Q": [ 16 ],
+            "R": [ 3 ]
+          }
+        },
+        "$auto$ff.cc:337:slice$719": {
+          "hide_name": 1,
+          "type": "$_SDFF_PP0_",
+          "parameters": {
+          },
+          "attributes": {
+            "src": "build/design.v:1341.2-1375.6"
+          },
+          "port_directions": {
+            "C": "input",
+            "D": "input",
+            "Q": "output",
+            "R": "input"
+          },
+          "connections": {
+            "C": [ 2 ],
+            "D": [ 48 ],
+            "Q": [ 17 ],
+            "R": [ 3 ]
+          }
+        }
+      },
+      "netnames": {
+        "$abc$1033$auto$opt_dff.cc:251:make_patterns_logic$610": {
+          "hide_name": 1,
+          "bits": [ 53 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$eq$build/design.v:1374$407_Y": {
+          "hide_name": 1,
+          "bits": [ 48 ],
+          "attributes": {
+            "src": "build/design.v:1374.12-1374.30"
+          }
+        },
+        "$abc$1033$new_n20": {
+          "hide_name": 1,
+          "bits": [ 18 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n21": {
+          "hide_name": 1,
+          "bits": [ 19 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n22": {
+          "hide_name": 1,
+          "bits": [ 20 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n23": {
+          "hide_name": 1,
+          "bits": [ 21 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n24": {
+          "hide_name": 1,
+          "bits": [ 22 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n25": {
+          "hide_name": 1,
+          "bits": [ 23 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n26": {
+          "hide_name": 1,
+          "bits": [ 24 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n27": {
+          "hide_name": 1,
+          "bits": [ 25 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n28": {
+          "hide_name": 1,
+          "bits": [ 26 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n29": {
+          "hide_name": 1,
+          "bits": [ 27 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n30": {
+          "hide_name": 1,
+          "bits": [ 28 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n31": {
+          "hide_name": 1,
+          "bits": [ 29 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n32": {
+          "hide_name": 1,
+          "bits": [ 30 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n33": {
+          "hide_name": 1,
+          "bits": [ 31 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n34": {
+          "hide_name": 1,
+          "bits": [ 32 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n35": {
+          "hide_name": 1,
+          "bits": [ 33 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n36": {
+          "hide_name": 1,
+          "bits": [ 34 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n37": {
+          "hide_name": 1,
+          "bits": [ 35 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n38": {
+          "hide_name": 1,
+          "bits": [ 36 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n39": {
+          "hide_name": 1,
+          "bits": [ 37 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n40": {
+          "hide_name": 1,
+          "bits": [ 38 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n42": {
+          "hide_name": 1,
+          "bits": [ 40 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n43": {
+          "hide_name": 1,
+          "bits": [ 41 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n44": {
+          "hide_name": 1,
+          "bits": [ 42 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n45": {
+          "hide_name": 1,
+          "bits": [ 43 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n47": {
+          "hide_name": 1,
+          "bits": [ 45 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n48": {
+          "hide_name": 1,
+          "bits": [ 46 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n51": {
+          "hide_name": 1,
+          "bits": [ 49 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n52": {
+          "hide_name": 1,
+          "bits": [ 50 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n53": {
+          "hide_name": 1,
+          "bits": [ 51 ],
+          "attributes": {
+          }
+        },
+        "$abc$1033$new_n54": {
+          "hide_name": 1,
+          "bits": [ 52 ],
+          "attributes": {
+          }
+        },
+        "$procmux$578.Y[0]": {
+          "hide_name": 1,
+          "bits": [ 39 ],
+          "attributes": {
+            "src": "build/design.v:1365.35-1365.35|build/design.v:1347.4-1373.11|/opt/homebrew/bin/../share/yosys/techmap.v:583.21-583.22"
+          }
+        },
+        "$procmux$578.Y[1]": {
+          "hide_name": 1,
+          "bits": [ 44 ],
+          "offset": 1,
+          "attributes": {
+            "src": "build/design.v:1365.35-1365.35|build/design.v:1347.4-1373.11|/opt/homebrew/bin/../share/yosys/techmap.v:583.21-583.22"
+          }
+        },
+        "$procmux$578.Y[2]": {
+          "hide_name": 1,
+          "bits": [ 47 ],
+          "offset": 2,
+          "attributes": {
+            "src": "build/design.v:1365.35-1365.35|build/design.v:1347.4-1373.11|/opt/homebrew/bin/../share/yosys/techmap.v:583.21-583.22"
+          }
+        },
+        "clk": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {
+            "src": "build/design.v:1325.13-1325.16"
+          }
+        },
+        "core_state[0]": {
+          "hide_name": 0,
+          "bits": [ 14 ],
+          "attributes": {
+            "src": "build/design.v:1330.19-1330.29"
+          }
+        },
+        "core_state[1]": {
+          "hide_name": 0,
+          "bits": [ 15 ],
+          "offset": 1,
+          "attributes": {
+            "src": "build/design.v:1330.19-1330.29"
+          }
+        },
+        "core_state[2]": {
+          "hide_name": 0,
+          "bits": [ 16 ],
+          "offset": 2,
+          "attributes": {
+            "src": "build/design.v:1330.19-1330.29"
+          }
+        },
+        "decoded_ret": {
+          "hide_name": 0,
+          "bits": [ 5 ],
+          "attributes": {
+            "src": "build/design.v:1328.13-1328.24"
+          }
+        },
+        "done": {
+          "hide_name": 0,
+          "bits": [ 17 ],
+          "attributes": {
+            "src": "build/design.v:1331.13-1331.17"
+          }
+        },
+        "lsu_state[0]": {
+          "hide_name": 0,
+          "bits": [ 6 ],
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "lsu_state[1]": {
+          "hide_name": 0,
+          "bits": [ 7 ],
+          "offset": 1,
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "lsu_state[2]": {
+          "hide_name": 0,
+          "bits": [ 8 ],
+          "offset": 2,
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "lsu_state[3]": {
+          "hide_name": 0,
+          "bits": [ 9 ],
+          "offset": 3,
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "lsu_state[4]": {
+          "hide_name": 0,
+          "bits": [ 10 ],
+          "offset": 4,
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "lsu_state[5]": {
+          "hide_name": 0,
+          "bits": [ 11 ],
+          "offset": 5,
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "lsu_state[6]": {
+          "hide_name": 0,
+          "bits": [ 12 ],
+          "offset": 6,
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "lsu_state[7]": {
+          "hide_name": 0,
+          "bits": [ 13 ],
+          "offset": 7,
+          "attributes": {
+            "src": "build/design.v:1329.45-1329.54"
+          }
+        },
+        "reset": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {
+            "src": "build/design.v:1326.13-1326.18"
+          }
+        },
+        "start": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {
+            "src": "build/design.v:1327.13-1327.18"
+          }
+        }
+      }
+    }
+  }
+}

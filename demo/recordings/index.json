@@ -1,0 +1,49 @@
+{
+ "runs": [
+  {
+   "file": "idx3_d0.json",
+   "digit": 0,
+   "label": 0
+  },
+  {
+   "file": "idx2_d1.json",
+   "digit": 1,
+   "label": 1
+  },
+  {
+   "file": "idx1_d2.json",
+   "digit": 2,
+   "label": 2
+  },
+  {
+   "file": "idx30_d3.json",
+   "digit": 3,
+   "label": 3
+  },
+  {
+   "file": "idx4_d4.json",
+   "digit": 4,
+   "label": 4
+  },
+  {
+   "file": "idx8_d5.json",
+   "digit": 5,
+   "label": 5
+  },
+  {
+   "file": "idx11_d6.json",
+   "digit": 6,
+   "label": 6
+  },
+  {
+   "file": "idx0_d7.json",
+   "digit": 7,
+   "label": 7
+  },
+  {
+   "file": "idx7_d9.json",
+   "digit": 9,
+   "label": 9
+  }
+ ]
+}

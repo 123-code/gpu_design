@@ -3,44 +3,44 @@
 
 module lsu #(
     parameter ADDR_BITS = 13
-) (
+) (//clock, reset and enable wires
     input wire clk,
     input wire reset,
     input wire enable,
-    input wire [2:0] core_state,         // Listens to the Scheduler's metronome
+    input wire [2:0] core_state,         // Listens to sceduler, information about phase(FETCH,DECODE,REQUEST or UPDATE)
 
-    // Control Pins (From Decoder)
-    input wire decoded_mem_read,         // 1 = LDR instruction
-    input wire decoded_mem_write,        // 1 = STR instruction
-    input wire decoded_base_add,         // 1 = ADDB  (read base  += immediate)
-    input wire decoded_wbase_add,        // 1 = WBASE (write base += immediate)
+    // Control Pins (From Decoder) tells which operation to perform
+    input wire decoded_mem_read,         // 1 = LDR load instruction
+    input wire decoded_mem_write,        // 1 = STR store instruction
+    input wire decoded_base_add,         // 1 = ADDB  read window (read base  += immediate)
+    input wire decoded_wbase_add,        // 1 = WBASE slide read window forward (write base += immediate)
     input wire [7:0] decoded_immediate,  // amount to add to a base
 
     // Data Pins (From Registers)
-    input wire [7:0] rs,                 // Memory offset (within the window/page)
-    input wire [7:0] rt,                 // Data to save (for STR)
+    input wire [7:0] rs,                 // data that determines the address
+    input wire [7:0] rt,                // //data target register
 
     // Highway to Arbiter/FIFO (reads)
-    output reg mem_valid,                // "I have a request!"
-    output reg [ADDR_BITS-1:0] mem_addr,
+    output reg mem_valid,                // LSU requests data"
+    output reg [ADDR_BITS-1:0] mem_addr,//memory address to be read from the LSU
     output reg [7:0] mem_write_data,
-    input wire mem_ready,                // "Request complete!"
+    input wire mem_ready,                // "flag from memory controller indicating the data has been sent"
     input wire [7:0] mem_read_data,      // Payload from RAM
 
     // Write port back to main memory (STR to a non-MMIO address). 1-cycle pulse.
-    output reg                  mem_we,
-    output reg [ADDR_BITS-1:0]  mem_waddr,
-    output reg [7:0]            mem_wdata,
+    output reg                  mem_we,//write enable, memory can overwrite whatever is at target address
+    output reg [ADDR_BITS-1:0]  mem_waddr, //13 bit target address for writing 
+    output reg [7:0]            mem_wdata,//data to be written
 
     // Memory-mapped emit (STR to offset 63 -> UART TX). Handshake throttles the
     // GPU to UART speed: emit_valid holds until emit_ready, stalling the scheduler.
-    output reg       emit_valid,
-    output reg [7:0] emit_data,
-    input  wire      emit_ready,
+    output reg       emit_valid,//LSU tries to send a byte to UART
+    output reg [7:0] emit_data,//data to be sent to UART
+    input  wire      emit_ready,//UART accepts the data
 
     // Output back to Thread
-    output reg [1:0] lsu_state,          // 00=IDLE, 01=REQ, 10=WAIT, 11=DONE
-    output reg [7:0] lsu_out             // Hand data back to Registers
+    output reg [1:0] lsu_state,          // broadcasts LSU state to scheduler
+    output reg [7:0] lsu_out             // data goes to this register when read is finished
 );
 
     localparam MMIO_TX = 8'd63;          // reserved offset -> UART TX register
@@ -52,8 +52,8 @@ module lsu #(
     reg [ADDR_BITS-1:0] base;    // read base  (ADDB)
     reg [ADDR_BITS-1:0] wbase;   // write base (WBASE)
 
-    always @(posedge clk) begin
-        if (reset) begin
+    always @(posedge clk) begin//on every clock cycle 
+        if (reset) begin //if reset, drps everything to 0
             lsu_state <= 2'b00; // IDLE
             mem_valid <= 0;
             lsu_out <= 0;
@@ -64,20 +64,21 @@ module lsu #(
             mem_we <= 0;
             mem_waddr <= '0;
             mem_wdata <= 0;
-        end else if (enable) begin
+        end else if (enable) begin// not resettinh 
 
-            // ADDB / WBASE: advance the read / write base in the UPDATE phase.
+            // checking if we need to update the physical memory pointers
             if (decoded_base_add  && core_state == 3'b110)
                 base  <= base  + decoded_immediate;
             if (decoded_wbase_add && core_state == 3'b110)
                 wbase <= wbase + decoded_immediate;
 
-            // --- STR: store to main memory / memory-mapped emit ---
-            mem_we <= 1'b0;                              // write strobe defaults low
-            if (decoded_mem_write) begin
-                case (lsu_state)
+         
+            mem_we <= 1'b0;                              // write enable defaults low
+            if (decoded_mem_write) begin//if the decoder mem write wire is on
+                case (lsu_state)//check lsu state
                     2'b00: if (core_state == 3'b011) lsu_state <= 2'b01; // wake on REQUEST
                     2'b01: begin // decode the target
+                    //based on the number of rs, we are going to either send via UART, or to the BRAM
                         if (rs == MMIO_TX) begin
                             emit_valid <= 1'b1;          // offset 63 -> UART TX
                             emit_data  <= rt;
@@ -98,8 +99,8 @@ module lsu #(
             end
 
             // If the Decoder flags this as a Memory Read (LDR)
-            if (decoded_mem_read) begin
-                case (lsu_state)
+            if (decoded_mem_read) begin//if the decoder mem read wire is on
+                case (lsu_state)//check lsu state
                     2'b00: begin // IDLE
                         if (core_state == 3'b011) lsu_state <= 2'b01; // Wake up on REQUEST phase
                     end
