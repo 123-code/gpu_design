@@ -39,6 +39,9 @@ module scheduler #(
     reg [7:0] stack_pc [WARPS_PER_CORE-1:0][3:0];
     reg [THREADS_PER_BLOCK-1:0] stack_mask [WARPS_PER_CORE-1:0][3:0];
     reg [1:0] stack_ptr [WARPS_PER_CORE-1:0];
+    // Mask active just before a (single-level) divergence, restored when the
+    // reconvergence stack empties so post-merge code runs on all those lanes.
+    reg [THREADS_PER_BLOCK-1:0] base_mask [WARPS_PER_CORE-1:0];
 
     wire [THREADS_PER_BLOCK-1:0] want_to_branch = branch_votes & active_mask[current_warp];
     wire [THREADS_PER_BLOCK-1:0] want_to_stay   = (~branch_votes) & active_mask[current_warp];
@@ -52,6 +55,7 @@ module scheduler #(
                 warp_status[w] <= WARP_READY;
                 warp_pc[w] <= 0;
                 active_mask[w] <= {THREADS_PER_BLOCK{1'b1}};
+                base_mask[w] <= {THREADS_PER_BLOCK{1'b1}};
                 stack_ptr[w] <= 0;
             end
         end else begin
@@ -128,15 +132,24 @@ module scheduler #(
                         active_mask[current_warp] <= stack_mask[current_warp][stack_ptr[current_warp] - 1];
                         stack_ptr[current_warp] <= stack_ptr[current_warp] - 1;
                     end else begin
-                        warp_pc[current_warp] <= warp_pc[current_warp] + 1;
+                        // Stack empty: the divergent region is fully reconverged.
+                        // Restore the pre-divergence mask so the common code that
+                        // follows runs on ALL lanes that were active going in
+                        // (otherwise only the last-popped lanes stay awake).
+                        warp_pc[current_warp]     <= warp_pc[current_warp] + 1;
+                        active_mask[current_warp] <= base_mask[current_warp];
                     end
                 end else if (decoded_pc_mux) begin
                     if (want_to_branch != 0 && want_to_stay != 0) begin
-                        // Divergence! Push 'stay' threads to stack
+                        // Divergence! Remember the full mask (only at the outermost
+                        // divergence) so the matching reconverging SYNC can restore
+                        // it, then push the 'stay' lanes and run the branch lanes.
+                        if (stack_ptr[current_warp] == 0)
+                            base_mask[current_warp] <= active_mask[current_warp];
                         stack_pc[current_warp][stack_ptr[current_warp]] <= warp_pc[current_warp] + 1;
                         stack_mask[current_warp][stack_ptr[current_warp]] <= want_to_stay;
                         stack_ptr[current_warp] <= stack_ptr[current_warp] + 1;
-                        
+
                         warp_pc[current_warp] <= decoded_immediate;
                         active_mask[current_warp] <= want_to_branch;
                     end else if (want_to_branch != 0) begin
