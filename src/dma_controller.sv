@@ -45,7 +45,7 @@ module dma_controller #(
     reg [ADDR_BITS-1:0]  wptr;          // the memory write pointer
     reg                  gpu_done_d;    // for rising-edge detection of gpu_done
     
-    reg [15:0]           instr_size;    // How many bytes of assembly code
+    reg [15:0]           instr_size;    // How many 16-bit instruction WORDS
     reg [15:0]           data_size;     // How many bytes of data
     
     reg [15:0]           instr_wdata_reg; // Holds the first half of a 16-bit instruction
@@ -113,36 +113,36 @@ module dma_controller #(
                 end
 
                 // ============================================================
-                // LOAD INSTR: Piece together 8-bit chunks into 16-bit instructions
+                // LOAD INSTR: assemble byte pairs (low then high) into 16-bit
+                // instruction words. `instr_size` is the number of WORDS; one
+                // word is written per high byte, so wptr counts words (not
+                // bytes) and we only test for completion on the high byte —
+                // which is always the last byte of a whole-word stream.
                 // ============================================================
                 S_LOAD_INSTR: begin
                     loading <= 1'b1;
                     if (rx_valid) begin
                         if (byte_toggle == 1'b0) begin
-                            // Catch the first 8 bits
+                            // Low byte: just latch it, wait for the high byte.
                             instr_wdata_reg[7:0] <= rx_byte;
                             byte_toggle <= 1'b1;
-                            
-                            if (wptr == instr_size - 1) begin
-                                wptr <= '0;
-                                state <= (data_size == 0) ? S_RUN : S_LOAD_DATA;
-                                if (data_size == 0) gpu_start <= 1'b1;
-                            end else begin
-                                wptr <= wptr + 1'b1;
-                            end
                         end else begin
-                            // Catch the next 8 bits, assemble into 16, and write!
+                            // High byte: assemble the full word and write it at
+                            // its word index. instr_waddr is driven straight from
+                            // wptr (NOT a running increment) — the program_memory
+                            // write is registered, so a same-cycle increment would
+                            // land the word one slot too high (off-by-one).
                             instr_wdata <= {rx_byte, instr_wdata_reg[7:0]};
-                            instr_we <= 1'b1;
+                            instr_we    <= 1'b1;
+                            instr_waddr <= wptr[7:0];
                             byte_toggle <= 1'b0;
-                            
+
                             if (wptr == instr_size - 1) begin
-                                wptr <= '0;
+                                wptr  <= '0;
                                 state <= (data_size == 0) ? S_RUN : S_LOAD_DATA;
                                 if (data_size == 0) gpu_start <= 1'b1;
                             end else begin
                                 wptr <= wptr + 1'b1;
-                                instr_waddr <= instr_waddr + 1'b1; // Advance the memory address
                             end
                         end
                     end

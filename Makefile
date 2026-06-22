@@ -5,11 +5,16 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim build flash flash-persist asm demo record clean
+.PHONY: sim sim-loadrun build flash flash-persist asm demo record clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
 	$(VVP) gpu_sim
+
+sim-loadrun:    ## General load->run->readback: stream a kernel+data over UART, run, check reply
+	cd software && cargo run --quiet -- sum_kernel.asm sum_kernel.hex
+	$(IVERILOG) -g2012 -s tb -o sim_loadrun test/tb_loadrun.sv src/*.sv
+	$(VVP) sim_loadrun
 
 demo:           ## Serve the draw-a-digit web demo at http://localhost:8000
 	python3 demo/server.py

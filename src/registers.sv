@@ -16,6 +16,8 @@ module registers #(
 
     input wire [7:0] block_id,    // Passed down from the Dispatcher
     input wire [2:0] core_state,  // Passed down from the Scheduler
+    input wire thread_active,                      // From Stage 1: Thread-level masking
+    input wire warp_active,                        // NEW: Warp-level maskingwake?
 
     // ==========================================
     // PART 2: CONTROL PINS (Wires coming from the DECODER)
@@ -102,8 +104,8 @@ module registers #(
             // When the Scheduler is in State 6 (UPDATE) [cite: 341]
             if (core_state == 3'b110) begin 
                 
-                // Only write if the Decoder says so, AND we aren't trying to overwrite R13, R14, or R15 [cite: 341]
-                if (decoded_reg_write_enable && decoded_rd_address < 13) begin
+                // Only write if the Decoder says so, AND thread active is on
+                if (decoded_reg_write_enable && decoded_rd_address < 13 && thread_active && warp_active) begin
 
                     if (decoded_id_read) begin
                         // TID/BID/BDIM: copy a read-only identity register into rd.

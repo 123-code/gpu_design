@@ -2,8 +2,9 @@
 `timescale 1ns/1ns
 
 module core #(
-    parameter THREADS_PER_BLOCK = 4,// defines how many threads run in parallel within this core
-    parameter ADDR_BITS = 13//width of data memoory address
+    parameter THREADS_PER_BLOCK = 4, // defines how many threads run in parallel within this core
+    parameter WARPS_PER_CORE = 2,    // Stage 2: Multiple warps for latency hiding
+    parameter ADDR_BITS = 13         // width of data memory address
 ) (
     input wire clk,//clock
     input wire reset,//reset signal
@@ -37,7 +38,8 @@ module core #(
 
     wire [2:0] core_state;
     assign debug_core_state = core_state;
-    wire [1:0] lsu_states [THREADS_PER_BLOCK-1:0];
+    wire [1:0] lsu_states [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [THREADS_PER_BLOCK-1:0] active_mask [WARPS_PER_CORE-1:0];
 
     // ==========================================
     // DECODER DATAPATH WIRES (real ports from decoder.sv)
@@ -65,6 +67,14 @@ module core #(
     wire decoded_fc_arg;
     wire decoded_fc_read;
     wire decoded_id_read;
+    wire decoded_sync; // NEW
+    
+    wire current_warp;
+    wire [THREADS_PER_BLOCK-1:0] branch_votes;
+    wire [THREADS_PER_BLOCK-1:0] all_branch_votes [WARPS_PER_CORE-1:0];
+    assign branch_votes = all_branch_votes[current_warp];
+
+    wire [7:0] warp_pc [WARPS_PER_CORE-1:0];
 
     // ==========================================
     // INSTANTIATE THE (REAL) DECODER
@@ -98,87 +108,97 @@ module core #(
         .decoded_fc_mac(decoded_fc_mac),
         .decoded_fc_arg(decoded_fc_arg),
         .decoded_fc_read(decoded_fc_read),
-        .decoded_id_read(decoded_id_read)
+        .decoded_id_read(decoded_id_read),
+        .decoded_sync(decoded_sync)
     );
 
     // ==========================================
     // THE SCHEDULER
     // ==========================================
     scheduler #(
-        .THREADS_PER_BLOCK(THREADS_PER_BLOCK)
+        .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+        .WARPS_PER_CORE(WARPS_PER_CORE)
     ) core_scheduler (
         .clk(clk),
         .reset(reset),
         .start(start),
         .decoded_ret(decoded_ret), // It is finally alive!
         .lsu_state(lsu_states),
+        
+        .decoded_sync(decoded_sync),
+        .decoded_pc_mux(decoded_pc_mux),
+        .decoded_immediate(decoded_immediate),
+        .branch_votes(branch_votes),
+        
+        .current_warp(current_warp),
+        .warp_pc(warp_pc),
+
         .core_state(core_state),
-        .done(done)
+        .done(done),
+        .active_mask(active_mask)
     );
 
     // ==========================================
     // THE THREAD GRID
     // ==========================================
-    wire [7:0] rs_bus [THREADS_PER_BLOCK-1:0];
-    wire [7:0] rt_bus [THREADS_PER_BLOCK-1:0];
-    wire [7:0] alu_out_bus [THREADS_PER_BLOCK-1:0];
-    wire [7:0] lsu_out_bus [THREADS_PER_BLOCK-1:0];
-    wire [7:0] reg3_bus [THREADS_PER_BLOCK-1:0];
+    wire [7:0] rs_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] rt_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] alu_out_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] lsu_out_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] reg3_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
-    // Expose thread 0's accumulator as this core's result
-    assign result = reg3_bus[0];
+    // Expose Warp 0 Thread 0's accumulator as this core's result
+    assign result = reg3_bus[0][0];
     
-    // PC bus (we drive it from next_pc for thread 0 for ROM fetches)
-    wire [7:0] pc_bus [THREADS_PER_BLOCK-1:0];
-    wire [7:0] next_pc_bus [THREADS_PER_BLOCK-1:0];
+    // PC bus
+    wire [7:0] pc_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] next_pc_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
-    // Per-thread LSU memory request/response wires (serviced by lsu_arbiter).
-    wire lsu_mem_valid [THREADS_PER_BLOCK-1:0];
-    wire [ADDR_BITS-1:0] lsu_mem_addr [THREADS_PER_BLOCK-1:0];
-    wire [7:0] lsu_mem_write_data [THREADS_PER_BLOCK-1:0];
-    wire [THREADS_PER_BLOCK-1:0] arb_ready;
-    wire [7:0] arb_rdata [THREADS_PER_BLOCK-1:0];
+    // Shared ALU inputs and outputs (Multiplexed by current_warp)
+    wire [7:0] active_rs [THREADS_PER_BLOCK-1:0];
+    wire [7:0] active_rt [THREADS_PER_BLOCK-1:0];
+    wire [7:0] active_alu_out [THREADS_PER_BLOCK-1:0];
 
-    // Per-thread emit; only thread 0's reaches the UART (one feature map).
-    wire [THREADS_PER_BLOCK-1:0] lsu_emit_valid;
-    wire [7:0] lsu_emit_data [THREADS_PER_BLOCK-1:0];
-    assign emit_valid = lsu_emit_valid[0];
-    assign emit_data  = lsu_emit_data[0];
+    // Flattened arrays for LSU Arbiter
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] lsu_req;
+    wire [ADDR_BITS-1:0] lsu_addr [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] arb_ready;
+    wire [7:0] arb_rdata [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
 
-    // Per-thread memory writes; only thread 0's reaches main memory (SIMT-uniform
-    // store model, like emit). Divergent per-thread writes would need an arbiter.
-    wire [THREADS_PER_BLOCK-1:0]  lsu_we;
-    wire [ADDR_BITS-1:0]          lsu_waddr [THREADS_PER_BLOCK-1:0];
-    wire [7:0]                    lsu_wdata [THREADS_PER_BLOCK-1:0];
-    assign mem_we    = lsu_we[0];
-    assign mem_waddr = lsu_waddr[0];
-    assign mem_wdata = lsu_wdata[0];
+    // Per-warp/thread wires for LSU
+    wire lsu_mem_valid [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [ADDR_BITS-1:0] lsu_mem_addr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] lsu_mem_write_data [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
-    // Pack the per-thread valid flags into a bus for the arbiter.
-    wire [THREADS_PER_BLOCK-1:0] lsu_req;
-    genvar v;
-    generate
-        for (v = 0; v < THREADS_PER_BLOCK; v = v + 1)
-            assign lsu_req[v] = lsu_mem_valid[v];
-    endgenerate
+    wire lsu_emit_valid [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] lsu_emit_data [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    assign emit_valid = lsu_emit_valid[current_warp][0];
+    assign emit_data  = lsu_emit_data[current_warp][0];
 
-    // 4 -> 1 read-port arbiter (snapshot-and-drain; latency hidden in WAIT state).
+    wire lsu_we [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [ADDR_BITS-1:0] lsu_waddr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] lsu_wdata [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    assign mem_we    = lsu_we[current_warp][0];
+    assign mem_waddr = lsu_waddr[current_warp][0];
+    assign mem_wdata = lsu_wdata[current_warp][0];
+
+    // Shared Arbiter (handles all warps and threads simultaneously)
     lsu_arbiter #(
-        .THREADS(THREADS_PER_BLOCK),
+        .THREADS(WARPS_PER_CORE * THREADS_PER_BLOCK),
         .ADDR_BITS(ADDR_BITS)
     ) core_lsu_arbiter (
         .clk(clk),
         .reset(reset),
         .req(lsu_req),
-        .addr(lsu_mem_addr),
+        .addr(lsu_addr),
         .mem_raddr(mem_raddr),
         .mem_rdata(mem_rdata),
         .ready(arb_ready),
         .rdata(arb_rdata)
     );
 
-    // Thread 0's PC drives the instruction ROM address (simple skeleton)
-    assign instruction_address = pc_bus[0];
+    // Thread 0's PC from the active warp drives the instruction ROM address
+    assign instruction_address = warp_pc[current_warp];
 
     // ==========================================
     // THE 3x3 MAC FUNCTIONAL UNIT (shared, core-level)
@@ -200,8 +220,8 @@ module core #(
             mac_wptr <= 4'd0;
         end else if (core_state == UPDATE_STATE) begin
             if (decoded_mac_load && mac_wptr < 4'd8) begin
-                mac_buf[mac_wptr] <= rs_bus[0];        // push a pixel from rs register
-                weight_buf[mac_wptr] <= rt_bus[0];     // push a weight from rt register we now load one weight and one pixel simultaneously
+                mac_buf[mac_wptr] <= rs_bus[current_warp][0];        // push a pixel from rs register
+                weight_buf[mac_wptr] <= rt_bus[current_warp][0];     // push a weight from rt register we now load one weight and one pixel simultaneously
                 mac_wptr <= mac_wptr + 4'd1;
             end else if (mac_fire) begin
                 mac_wptr <= 4'd0;                      // consumed -> ready for next window
@@ -241,118 +261,130 @@ module core #(
         .frst  (decoded_fc_clear && (core_state == UPDATE_STATE)),
         .mac_en(decoded_fc_mac   && (core_state == UPDATE_STATE)),
         .farg  (decoded_fc_arg   && (core_state == UPDATE_STATE)),
-        .px(rs_bus[0]),
-        .wt(rt_bus[0]),
-        .bias_in({{24{rt_bus[0][7]}}, rt_bus[0]}), // Sign-extend, padding 8-bit bias to 32-bit bd sending to fc mac vector unit
+        .px(rs_bus[current_warp][0]),
+        .wt(rt_bus[current_warp][0]),
+        .bias_in({{24{rt_bus[current_warp][0][7]}}, rt_bus[current_warp][0]}), // Sign-extend, padding 8-bit bias to 32-bit bd sending to fc mac vector unit
         .result(fc_result_32)
     );
 
     // Writeback source for the shared MAC mux: conv MAC normally, FC readout on FRD.
     wire [7:0] mac_or_fc_result = decoded_fc_read ? fc_result : mac_result;
 
-    genvar i;
+    genvar w, i;
     generate
-        for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : thread_block
-            
-            // Real registers module ports. THREAD_ID(i) makes %threadIdx (R15)
-            // hold this lane's index, so SIMT threads can address distinct data.
-            registers #(
-                .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
-                .THREAD_ID(i)
-            ) thread_regs (
-                .clk(clk),
-                .reset(reset),
-                .enable(1'b1),
-                .block_id(block_id),
-                .core_state(core_state),
+        // Shared ALUs across all warps (Time-multiplexed execution units)
+        for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : shared_alus
+            assign active_rs[i] = rs_bus[current_warp][i];
+            assign active_rt[i] = rt_bus[current_warp][i];
 
-                .decoded_rd_address(decoded_rd_address),
-                .decoded_rs_address(decoded_rs_address),
-                .decoded_rt_address(decoded_rt_address),
-
-                .decoded_reg_write_enable(decoded_reg_write_enable),
-                .decoded_reg_input_mux(decoded_reg_input_mux),
-                .decoded_id_read(decoded_id_read),
-                .decoded_immediate(decoded_immediate),
-
-                .alu_out(alu_out_bus[i]),
-                .lsu_out(lsu_out_bus[i]),
-
-                .rs(rs_bus[i]),
-                .rt(rt_bus[i]),
-
-                .mac_result(mac_or_fc_result),
-                .debug_reg3(reg3_bus[i])
-            );
-
-            // Real (simple) ALU
             alu thread_alu (
                 .clk(clk),
                 .opcode(current_instruction[15:12]), 
                 .imm(decoded_immediate),             
-                .rs(rs_bus[i]),
-                .rt(rt_bus[i]),
-                .alu_out(alu_out_bus[i])
+                .rs(active_rs[i]),
+                .rt(active_rt[i]),
+                .alu_out(active_alu_out[i])
             );
+        end
 
-            // Real LSU (base+offset addressing into main_memory via the arbiter)
-            lsu #(.ADDR_BITS(ADDR_BITS)) thread_lsu (
-                .clk(clk),
-                .reset(reset),
-                .enable(1'b1),
-                .core_state(core_state),
+        // Independent state for each warp
+        for (w = 0; w < WARPS_PER_CORE; w = w + 1) begin : warp_block
+            wire warp_active_flag = (current_warp == w);
+            for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : thread_block
+                
+                localparam flat_id = w * THREADS_PER_BLOCK + i;
 
-                .decoded_mem_read(decoded_mem_read_enable),
-                .decoded_mem_write(decoded_mem_write_enable),
-                .decoded_base_add(decoded_base_add),
-                .decoded_wbase_add(decoded_wbase_add),
-                .decoded_immediate(decoded_immediate),
+                registers #(
+                    .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+                    .THREAD_ID(i)
+                ) thread_regs (
+                    .clk(clk),
+                    .reset(reset),
+                    .enable(1'b1),
+                    .block_id(block_id),
+                    .core_state(core_state),
+                    .thread_active(active_mask[w][i]),
+                    .warp_active(warp_active_flag),
 
-                .rs(rs_bus[i]),
-                .rt(rt_bus[i]),
+                    .decoded_rd_address(decoded_rd_address),
+                    .decoded_rs_address(decoded_rs_address),
+                    .decoded_rt_address(decoded_rt_address),
 
-                .mem_valid(lsu_mem_valid[i]),
-                .mem_addr(lsu_mem_addr[i]),
-                .mem_write_data(lsu_mem_write_data[i]),
-                .mem_ready(arb_ready[i]),
-                .mem_read_data(arb_rdata[i]),
+                    .decoded_reg_write_enable(decoded_reg_write_enable),
+                    .decoded_reg_input_mux(decoded_reg_input_mux),
+                    .decoded_id_read(decoded_id_read),
+                    .decoded_immediate(decoded_immediate),
 
-                .mem_we(lsu_we[i]),
-                .mem_waddr(lsu_waddr[i]),
-                .mem_wdata(lsu_wdata[i]),
+                    .alu_out(active_alu_out[i]), // Fed from the shared ALU!
+                    .lsu_out(lsu_out_bus[w][i]),
 
-                .emit_valid(lsu_emit_valid[i]),
-                .emit_data(lsu_emit_data[i]),
-                .emit_ready(emit_ready),
+                    .rs(rs_bus[w][i]),
+                    .rt(rt_bus[w][i]),
 
-                .lsu_state(lsu_states[i]),
-                .lsu_out(lsu_out_bus[i])
-            );
+                    .mac_result(mac_or_fc_result),
+                    .debug_reg3(reg3_bus[w][i])
+                );
 
-            // Real PC module — supply required decoder controls as 0 for skeleton
-            pc thread_pc (
-                .clk(clk),
-                .reset(reset),
-                .enable(1'b1),
-                .core_state(core_state),
+                lsu #(.ADDR_BITS(ADDR_BITS)) thread_lsu (
+                    .clk(clk),
+                    .reset(reset),
+                    .enable(1'b1),
+                    .thread_active(active_mask[w][i]),
+                    .warp_active(warp_active_flag),
+                    .core_state(core_state),
 
-                .decoded_nzp(decoded_nzp),
-                .decoded_immediate(decoded_immediate),
-                .decoded_nzp_write_enable(decoded_nzp_write_enable),
-                .decoded_pc_mux(decoded_pc_mux),
+                    .decoded_mem_read(decoded_mem_read_enable),
+                    .decoded_mem_write(decoded_mem_write_enable),
+                    .decoded_base_add(decoded_base_add),
+                    .decoded_wbase_add(decoded_wbase_add),
+                    .decoded_immediate(decoded_immediate),
 
-                .alu_out(alu_out_bus[i]),
+                    .rs(rs_bus[w][i]),
+                    .rt(rt_bus[w][i]),
 
-                .current_pc(pc_bus[i]),
-                .next_pc(next_pc_bus[i])
-            );
+                    .mem_valid(lsu_mem_valid[w][i]),
+                    .mem_addr(lsu_mem_addr[w][i]),
+                    .mem_write_data(lsu_mem_write_data[w][i]),
+                    .mem_ready(arb_ready[flat_id]),
+                    .mem_read_data(arb_rdata[flat_id]),
 
-            // Close the PC feedback loop: the current PC is just the registered
-            // next_pc from pc.sv. pc.sv advances it (+1 or branch target) during
-            // EXECUTE, so this acts as the program counter for sequential and
-            // branching control flow alike.
-            assign pc_bus[i] = next_pc_bus[i];
-            
+                    .mem_we(lsu_we[w][i]),
+                    .mem_waddr(lsu_waddr[w][i]),
+                    .mem_wdata(lsu_wdata[w][i]),
+
+                    .emit_valid(lsu_emit_valid[w][i]),
+                    .emit_data(lsu_emit_data[w][i]),
+                    .emit_ready(emit_ready),
+
+                    .lsu_state(lsu_states[w][i]),
+                    .lsu_out(lsu_out_bus[w][i])
+                );
+
+                // Tie Arbiter flattened arrays
+                assign lsu_req[flat_id] = lsu_mem_valid[w][i];
+                assign lsu_addr[flat_id] = lsu_mem_addr[w][i];
+
+                pc thread_pc (
+                    .clk(clk),
+                    .reset(reset),
+                    .enable(1'b1),
+                    .warp_active(warp_active_flag),
+                    .core_state(core_state),
+
+                    .decoded_nzp(decoded_nzp),
+                    .decoded_immediate(decoded_immediate),
+                    .decoded_nzp_write_enable(decoded_nzp_write_enable),
+                    .decoded_pc_mux(decoded_pc_mux),
+
+                    .alu_out(active_alu_out[i]),
+                    .branch_taken(all_branch_votes[w][i]),
+
+                    .current_pc(pc_bus[w][i]),
+                    .next_pc(next_pc_bus[w][i])
+                );
+
+                assign pc_bus[w][i] = next_pc_bus[w][i];
+            end
         end
     endgenerate
 

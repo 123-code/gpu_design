@@ -165,62 +165,29 @@ module gpu (
     );
 
     // ------------------------------------------------------------------
-    // Emit path + per-core cycle counters.
+    // Emit path: stream each core's STR-to-63 bytes straight to the host.
     //
-    // Per run the host receives a fixed 8-byte reply:
-    //   [core 0 kernel bytes][core 0 cycles x3 MSB-first]
-    //   [core 1 kernel bytes][core 1 cycles x3 MSB-first]
+    // Core 0 is served first; we switch to core 1 only once core 0 is
+    // terminally done (its scheduler's DONE state is sticky, so it can never
+    // emit again) and has no pending byte — so the handoff can't tear a byte.
+    // Forwarding core 1 afterward also drains its emits, letting its
+    // scheduler reach DONE.
     //
-    // Core 0 is always served first; the switch to core 1 happens only once
-    // core 0 is terminally done (its scheduler's DONE state is sticky and it
-    // can never emit again), so the handoff can't tear a byte. Core 1's LSU
-    // simply holds emit_valid until its turn — that's the normal handshake
-    // stall, and it means cnt1 measures completion time including the wait
-    // for core 0's UART bytes.
+    // The reply is whatever the kernels emit, in core-0-then-core-1 order.
+    // Kernels frame their own output (the demo convention is a 1-byte length
+    // followed by that many result bytes) so the host knows when each core's
+    // output ends. No cycle counts are appended.
     // ------------------------------------------------------------------
-    reg [23:0] cnt0, cnt1;  // 24 bits @ 27 MHz wraps at 0.62 s; a run is ~20 ms
-    always @(posedge clk) begin
-        if (reset) begin
-            cnt0 <= 24'd0;
-            cnt1 <= 24'd0;
-        end else if (enable) begin
-            if (!core_0_done) cnt0 <= cnt0 + 24'd1;
-            if (!core_1_done) cnt1 <= cnt1 + 24'd1;
-        end
-    end
-
-    localparam E_CORE0 = 3'd0, E_CNT0 = 3'd1,
-               E_CORE1 = 3'd2, E_CNT1 = 3'd3, E_END = 3'd4;
-    reg [2:0] estate;
-    reg [1:0] bidx;  // counter byte being sent: 2 = MSB ... 0 = LSB
-
-    wire [23:0] cnt_cur  = (estate == E_CNT0) ? cnt0 : cnt1;
-    wire [7:0]  cnt_byte = (bidx == 2'd2) ? cnt_cur[23:16]
-                         : (bidx == 2'd1) ? cnt_cur[15:8]
-                         :                  cnt_cur[7:0];
+    localparam E_CORE0 = 2'd0, E_CORE1 = 2'd1, E_END = 2'd2;
+    reg [1:0] estate;
 
     always @(posedge clk) begin
         if (reset) begin
             estate <= E_CORE0;
-            bidx   <= 2'd2;
         end else begin
             case (estate)
-                E_CORE0: if (core_0_done && !c0_emit_valid) begin
-                             estate <= E_CNT0;
-                             bidx   <= 2'd2;
-                         end
-                E_CNT0:  if (emit_ready) begin
-                             if (bidx == 2'd0) estate <= E_CORE1;
-                             else              bidx   <= bidx - 2'd1;
-                         end
-                E_CORE1: if (core_1_done && !c1_emit_valid) begin
-                             estate <= E_CNT1;
-                             bidx   <= 2'd2;
-                         end
-                E_CNT1:  if (emit_ready) begin
-                             if (bidx == 2'd0) estate <= E_END;
-                             else              bidx   <= bidx - 2'd1;
-                         end
+                E_CORE0: if (core_0_done && !c0_emit_valid) estate <= E_CORE1;
+                E_CORE1: if (core_1_done && !c1_emit_valid) estate <= E_END;
                 default: ;
             endcase
         end
@@ -228,11 +195,9 @@ module gpu (
 
     assign emit_valid = (estate == E_CORE0) ? c0_emit_valid
                       : (estate == E_CORE1) ? c1_emit_valid
-                      : (estate == E_CNT0 || estate == E_CNT1) ? 1'b1
-                      : 1'b0;
+                      :                       1'b0;
     assign emit_data  = (estate == E_CORE0) ? c0_emit_data
-                      : (estate == E_CORE1) ? c1_emit_data
-                      : cnt_byte;
+                      :                       c1_emit_data;
     assign c0_emit_ready = (estate == E_CORE0) && emit_ready;
     assign c1_emit_ready = (estate == E_CORE1) && emit_ready;
 

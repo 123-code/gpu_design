@@ -11,7 +11,7 @@ module pc #(
     input wire clk,              // The metronome that triggers the memory vault to save [cite: 318]
     input wire reset,            // Flushes the vault to 0 [cite: 318]
     input wire enable,           // Is this specific thread active right now? [cite: 318]
-
+    input wire warp_active,      // NEW: Warp-level masking
     input wire [2:0] core_state,  // The current step in the execution loop [cite: 318]
 
     // ==========================================
@@ -26,6 +26,7 @@ module pc #(
     // DATA PINS (Inputs & Outputs)
     // ==========================================
     input wire [DATA_MEM_DATA_BITS-1:0] alu_out,   // Cable from ALU (Bottom 3 bits are N, Z, P) [cite: 319]
+    output wire branch_taken,                      // NEW: Did this thread pass the branch condition?
     
     input wire [PROGRAM_MEM_ADDR_BITS-1:0] current_pc, // The line we are currently on [cite: 319]
     output reg [PROGRAM_MEM_ADDR_BITS-1:0] next_pc    // The line we are going to [cite: 319]
@@ -83,7 +84,7 @@ module pc #(
             // UPDATING THE VAULT
             // ==========================================
             // When the Scheduler reaches State 6 (UPDATE) [cite: 325]
-            if (core_state == 3'b110) begin 
+            if (core_state == 3'b110 && warp_active) begin 
                 
                 // If the Decoder tells us a CMP instruction just happened... [cite: 325]
                 if (decoded_nzp_write_enable) begin
@@ -96,4 +97,8 @@ module pc #(
             end      
         end
     end
+
+    // NEW: Expose the condition check result
+    assign branch_taken = ((nzp & decoded_nzp) != 3'b0);
+
 endmodule

@@ -7,6 +7,8 @@ module lsu #(
     input wire clk,
     input wire reset,
     input wire enable,
+    input wire thread_active,
+    input wire warp_active, // NEW: Warp-level masking            // Is this thread awake?
     input wire [2:0] core_state,         // Listens to sceduler, information about phase(FETCH,DECODE,REQUEST or UPDATE)
 
     // Control Pins (From Decoder) tells which operation to perform
@@ -51,74 +53,80 @@ module lsu #(
     // Both move in small ADDB/WBASE steps (forward only).
     reg [ADDR_BITS-1:0] base;    // read base  (ADDB)
     reg [ADDR_BITS-1:0] wbase;   // write base (WBASE)
+    reg active_is_read;
+    reg active_is_write;
 
-    always @(posedge clk) begin//on every clock cycle 
-        if (reset) begin //if reset, drps everything to 0
-            lsu_state <= 2'b00; // IDLE
-            mem_valid <= 0;
+    always @(posedge clk) begin
+        if (reset) begin
+            lsu_state <= 2'b00;
             lsu_out <= 0;
-            base <= '0;
-            wbase <= '0;
+            base <= 0;
+            wbase <= 0;
+            
             emit_valid <= 0;
             emit_data <= 0;
+
+            mem_valid <= 0;
+            mem_addr <= '0;
+            
             mem_we <= 0;
             mem_waddr <= '0;
             mem_wdata <= 0;
-        end else if (enable) begin// not resettinh 
-
-            // checking if we need to update the physical memory pointers
-            if (decoded_base_add  && core_state == 3'b110)
-                base  <= base  + decoded_immediate;
-            if (decoded_wbase_add && core_state == 3'b110)
+            
+            active_is_read <= 0;
+            active_is_write <= 0;
+        end else if (enable) begin
+            // Base pointers only update if THIS warp is active and in UPDATE state
+            if (decoded_base_add && core_state == 3'b110 && warp_active)
+                base <= base + decoded_immediate;
+            if (decoded_wbase_add && core_state == 3'b110 && warp_active)
                 wbase <= wbase + decoded_immediate;
 
-         
-            mem_we <= 1'b0;                              // write enable defaults low
-            if (decoded_mem_write) begin//if the decoder mem write wire is on
-                case (lsu_state)//check lsu state
-                    2'b00: if (core_state == 3'b011) lsu_state <= 2'b01; // wake on REQUEST
-                    2'b01: begin // decode the target
-                    //based on the number of rs, we are going to either send via UART, or to the BRAM
+            mem_we <= 1'b0;
+
+            if (lsu_state == 2'b00) begin
+                // Waiting for a new request from the active warp
+                if (core_state == 3'b011 && thread_active && warp_active) begin
+                    if (decoded_mem_read) begin
+                        lsu_state <= 2'b10; // Skip 01, go straight to WAITING
+                        active_is_read <= 1;
+                        active_is_write <= 0;
+                        mem_valid <= 1;
+                        mem_addr <= base + rs;
+                    end else if (decoded_mem_write) begin
+                        active_is_read <= 0;
+                        active_is_write <= 1;
                         if (rs == MMIO_TX) begin
-                            emit_valid <= 1'b1;          // offset 63 -> UART TX
-                            emit_data  <= rt;
-                            lsu_state  <= 2'b10;         // wait for the byte to be accepted
+                            emit_valid <= 1;
+                            emit_data <= rt;
+                            lsu_state <= 2'b10;
                         end else begin
-                            mem_we    <= 1'b1;           // commit a BRAM write next cycle
-                            mem_waddr <= wbase + rs;     // write base + offset
+                            mem_we <= 1;
+                            mem_waddr <= wbase + rs;
                             mem_wdata <= rt;
-                            lsu_state <= 2'b11;
+                            lsu_state <= 2'b11; // Done immediately
                         end
                     end
-                    2'b10: if (emit_ready) begin          // UART took the byte
+                end
+            end else if (active_is_write) begin
+                case (lsu_state)
+                    2'b10: if (emit_ready) begin
                         emit_valid <= 1'b0;
                         lsu_state  <= 2'b11;
                     end
-                    2'b11: if (core_state == 3'b110) lsu_state <= 2'b00;
+                    // Wait until warp is active and in UPDATE to return to IDLE
+                    2'b11: if (warp_active && core_state == 3'b110) lsu_state <= 2'b00;
                 endcase
-            end
-
-            // If the Decoder flags this as a Memory Read (LDR)
-            if (decoded_mem_read) begin//if the decoder mem read wire is on
-                case (lsu_state)//check lsu state
-                    2'b00: begin // IDLE
-                        if (core_state == 3'b011) lsu_state <= 2'b01; // Wake up on REQUEST phase
-                    end
-                    2'b01: begin // REQUESTING
-                        mem_valid <= 1;                  // Raise the flag to the Arbiter
-                        mem_addr <= base + rs;           // base + offset (full address)
-                        lsu_state <= 2'b10;              // Move to WAITING
-                    end
-                    2'b10: begin // WAITING
-                        if (mem_ready) begin   // Arbiter drops the payload!
-                            mem_valid <= 0;    // Lower the flag
-                            lsu_out <= mem_read_data; // Catch the data
-                            lsu_state <= 2'b11; // Move to DONE
+            end else if (active_is_read) begin
+                case (lsu_state)
+                    2'b10: begin
+                        if (mem_ready) begin
+                            mem_valid <= 0;
+                            lsu_out <= mem_read_data;
+                            lsu_state <= 2'b11;
                         end
                     end
-                    2'b11: begin // DONE
-                        if (core_state == 3'b110) lsu_state <= 2'b00; // Go back to sleep after UPDATE
-                    end
+                    2'b11: if (warp_active && core_state == 3'b110) lsu_state <= 2'b00;
                 endcase
             end
         end

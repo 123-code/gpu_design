@@ -11,10 +11,7 @@
 // the testbench (now) — can read back the loaded payload.
 module data_pipeline #(
     parameter ADDR_BITS     = 13,         // 4096-byte main memory (2nd BRAM mapped)
-    parameter PAYLOAD_BYTES = 793,        // overridden by top for the active kernel
-    parameter IMG_BYTES     = 784,        // bytes per image: the first image goes
-                                          // to core 0's memory copy, the second
-                                          // to core 1's
+    parameter PAYLOAD_BYTES = 793,        // vestigial: the DMA is header-driven now
     parameter CLK_FREQ      = 27000000,
     parameter BAUD_RATE     = 115200
 ) (
@@ -44,7 +41,7 @@ module data_pipeline #(
     // Core 1's read/write ports into its own memory copy. Replicating the
     // BRAM is how core 1 gets a private read port (the core<->memory read
     // path has no handshake, so the port can't be time-shared); the DMA
-    // broadcast keeps both copies loaded with the same payload.
+    // broadcasts every byte into both copies so they start identical.
     input  wire [ADDR_BITS-1:0] mem_raddr_1,
     output wire [7:0]           mem_rdata_1,
     input  wire                 gpu_we_1,
@@ -80,17 +77,17 @@ module data_pipeline #(
     );
 
     // ---- Write-port owner: the DMA while loading, the GPU while running ----
-    // The DMA stream is split by address: payload bytes [0, IMG_BYTES) land in
-    // core 0's copy, [IMG_BYTES, 2*IMG_BYTES) land in core 1's copy at offset 0.
-    wire dma_to_1 = dma_waddr >= IMG_BYTES;
+    // Broadcast model: while loading, every DMA byte is written to BOTH core
+    // memory copies at the same address, so the two cores run the same program
+    // over identical data (block_id is the only per-core difference). While
+    // running, each core owns its own write port.
+    wire                 mem_we    = loading ? dma_we    : gpu_we;
+    wire [ADDR_BITS-1:0] mem_waddr = loading ? dma_waddr : gpu_waddr;
+    wire [7:0]           mem_wdata = loading ? dma_wdata : gpu_wdata;
 
-    wire                 mem_we    = loading ? (dma_we && !dma_to_1) : gpu_we;
-    wire [ADDR_BITS-1:0] mem_waddr = loading ? dma_waddr             : gpu_waddr;
-    wire [7:0]           mem_wdata = loading ? dma_wdata             : gpu_wdata;
-
-    wire                 mem_we_1    = loading ? (dma_we && dma_to_1)      : gpu_we_1;
-    wire [ADDR_BITS-1:0] mem_waddr_1 = loading ? (dma_waddr - IMG_BYTES)   : gpu_waddr_1;
-    wire [7:0]           mem_wdata_1 = loading ? dma_wdata                 : gpu_wdata_1;
+    wire                 mem_we_1    = loading ? dma_we    : gpu_we_1;
+    wire [ADDR_BITS-1:0] mem_waddr_1 = loading ? dma_waddr : gpu_waddr_1;
+    wire [7:0]           mem_wdata_1 = loading ? dma_wdata : gpu_wdata_1;
 
     // ---- Main data memory, one copy per core ----
     main_memory #(

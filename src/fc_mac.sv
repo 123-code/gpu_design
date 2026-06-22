@@ -21,9 +21,7 @@
 // requantization -- so tiny-gpu reproduces cnn_chip's predictions bit-for-bit.
 // The 9x8 product maps to a DSP block.
 // ============================================================================
-module fc_mac #(
-
-) (
+module fc_mac (
     input  wire        clk,
     input  wire        reset,            // active-high
 

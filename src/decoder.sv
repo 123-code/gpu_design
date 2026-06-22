@@ -48,10 +48,12 @@ module decoder (
     output reg decoded_fc_arg,     // FARG : finalize current digit (add bias, argmax)
     output reg decoded_fc_read,    // FBEST: rd <- best_idx (uses the MAC writeback mux)
 
-    // SIMT identity read (TID/BID/BDIM = MOV with rs != 0): copy a read-only
     // identity register (R15/R13/R14) into rd. The selector reuses the rs field
     // (decoded_rs_address): 1->threadIdx, 2->blockIdx, 3->blockDim.
-    output reg decoded_id_read
+    output reg decoded_id_read,
+    
+    // Pop the reconvergence stack and switch to sleeping threads
+    output reg decoded_sync
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -110,6 +112,7 @@ module decoder (
             decoded_fc_arg <= 0;
             decoded_fc_read <= 0;
             decoded_id_read <= 0;
+            decoded_sync <= 0;
 
         end else begin
             // Only trigger the logic machinery if the 3 core_state wires read '010' (State 2)
@@ -147,6 +150,7 @@ module decoder (
                 decoded_fc_arg <= 0;
                 decoded_fc_read <= 0;
                 decoded_id_read <= 0;
+                decoded_sync <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -228,7 +232,11 @@ module decoder (
                         decoded_mem_write_enable <= 1;
                     end
                     RET: begin 
-                        decoded_ret <= 1;                     
+                        if (instruction[0] == 1'b1) begin
+                            decoded_sync <= 1;
+                        end else begin
+                            decoded_ret <= 1;                     
+                        end
                     end
                 endcase
             end
