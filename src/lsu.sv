@@ -9,7 +9,7 @@ module lsu #(
     input wire enable,
     input wire thread_active,
     input wire warp_active, // NEW: Warp-level masking            // Is this thread awake?
-    input wire [2:0] core_state,         // Listens to sceduler, information about phase(FETCH,DECODE,REQUEST or UPDATE)
+    input wire [3:0] core_state,         // 4-bit pipeline phase from the scheduler
 
     // Control Pins (From Decoder) tells which operation to perform
     input wire decoded_mem_read,         // 1 = LDR load instruction
@@ -77,16 +77,16 @@ module lsu #(
             active_is_write <= 0;
         end else if (enable) begin
             // Base pointers only update if THIS warp is active and in UPDATE state
-            if (decoded_base_add && core_state == 3'b110 && warp_active)
+            if (decoded_base_add && core_state == 4'b0111 && warp_active)
                 base <= base + decoded_immediate;
-            if (decoded_wbase_add && core_state == 3'b110 && warp_active)
+            if (decoded_wbase_add && core_state == 4'b0111 && warp_active)
                 wbase <= wbase + decoded_immediate;
 
             mem_we <= 1'b0;
 
             if (lsu_state == 2'b00) begin
                 // Waiting for a new request from the active warp
-                if (core_state == 3'b011 && thread_active && warp_active) begin
+                if (core_state == 4'b0100 && thread_active && warp_active) begin
                     if (decoded_mem_read) begin
                         lsu_state <= 2'b10; // Skip 01, go straight to WAITING
                         active_is_read <= 1;
@@ -115,7 +115,7 @@ module lsu #(
                         lsu_state  <= 2'b11;
                     end
                     // Wait until warp is active and in UPDATE to return to IDLE
-                    2'b11: if (warp_active && core_state == 3'b110) lsu_state <= 2'b00;
+                    2'b11: if (warp_active && core_state == 4'b0111) lsu_state <= 2'b00;
                 endcase
             end else if (active_is_read) begin
                 case (lsu_state)
@@ -126,7 +126,7 @@ module lsu #(
                             lsu_state <= 2'b11;
                         end
                     end
-                    2'b11: if (warp_active && core_state == 3'b110) lsu_state <= 2'b00;
+                    2'b11: if (warp_active && core_state == 4'b0111) lsu_state <= 2'b00;
                 endcase
             end
         end

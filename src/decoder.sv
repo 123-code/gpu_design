@@ -8,7 +8,7 @@ module decoder (
     input wire clk,              // The heartbeat of the system (27MHz on the Tang Nano)
     input wire reset,            // The physical reset button/signal
     
-    input wire [2:0] core_state,
+    input wire [3:0] core_state,
     input wire [15:0] instruction,
     
     // ==========================================
@@ -115,8 +115,8 @@ module decoder (
             decoded_sync <= 0;
 
         end else begin
-            // Only trigger the logic machinery if the 3 core_state wires read '010' (State 2)
-            if (core_state == 3'b010) begin 
+            // Only decode in the DECODE stage (4-bit state = 0011)
+            if (core_state == 4'b0011) begin
                 
                 // --- THE BIT SLICER ---
                 // Physically branching wires from the 16-lane 'instruction' bus to the output pins

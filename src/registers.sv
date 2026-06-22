@@ -15,7 +15,7 @@ module registers #(
     input wire enable, // Is this thread active? (1 = Yes, 0 = No)
 
     input wire [7:0] block_id,    // Passed down from the Dispatcher
-    input wire [2:0] core_state,  // Passed down from the Scheduler
+    input wire [3:0] core_state,  // Passed down from the Scheduler (4-bit)
     input wire thread_active,                      // From Stage 1: Thread-level masking
     input wire warp_active,                        // NEW: Warp-level maskingwake?
 
@@ -94,7 +94,7 @@ module registers #(
             
             // --- READ ACTION ---
             // When the Scheduler is in State 3 (REQUEST) [cite: 340]
-            if (core_state == 3'b011) begin 
+            if (core_state == 4'b0100) begin // REQUEST: latch rs/rt
                 // Look inside the requested slots and push the data out the rs/rt pins [cite: 340, 341]
                 rs <= registers[decoded_rs_address]; 
                 rt <= registers[decoded_rt_address];
@@ -102,7 +102,7 @@ module registers #(
 
             // --- WRITE ACTION ---
             // When the Scheduler is in State 6 (UPDATE) [cite: 341]
-            if (core_state == 3'b110) begin 
+            if (core_state == 4'b0111) begin // UPDATE: write back
                 
                 // Only write if the Decoder says so, AND thread active is on
                 if (decoded_reg_write_enable && decoded_rd_address < 13 && thread_active && warp_active) begin

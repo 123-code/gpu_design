@@ -12,7 +12,7 @@ module pc #(
     input wire reset,            // Flushes the vault to 0 [cite: 318]
     input wire enable,           // Is this specific thread active right now? [cite: 318]
     input wire warp_active,      // NEW: Warp-level masking
-    input wire [2:0] core_state,  // The current step in the execution loop [cite: 318]
+    input wire [3:0] core_state,  // The current step in the execution loop (4-bit)
 
     // ==========================================
     // CONTROL PINS (From the Decoder)
@@ -52,7 +52,7 @@ module pc #(
             // COMPONENTS 2, 3 & 4: THE ADDER, TARGET, & MUX
             // ==========================================
             // When the Scheduler reaches State 5 (EXECUTE) [cite: 321]
-            if (core_state == 3'b101) begin 
+            if (core_state == 4'b0110) begin // EXECUTE
                 
                 // MUX CHECK: Did the Decoder flip the switch to request a Jump? [cite: 321]
                 if (decoded_pc_mux == 1) begin 
@@ -84,7 +84,7 @@ module pc #(
             // UPDATING THE VAULT
             // ==========================================
             // When the Scheduler reaches State 6 (UPDATE) [cite: 325]
-            if (core_state == 3'b110 && warp_active) begin 
+            if (core_state == 4'b0111 && warp_active) begin // UPDATE
                 
                 // If the Decoder tells us a CMP instruction just happened... [cite: 325]
                 if (decoded_nzp_write_enable) begin

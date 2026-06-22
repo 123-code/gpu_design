@@ -36,8 +36,11 @@ module core #(
     output wire [2:0] debug_core_state
 );
 
-    wire [2:0] core_state;
-    assign debug_core_state = core_state;
+    // 4-bit pipeline state, driven by the scheduler. Must match scheduler.sv:
+    //   IDLE=0000 SELECT_WARP=0001 FETCH=0010 DECODE=0011 REQUEST=0100
+    //   WAIT=0101 EXECUTE=0110 UPDATE=0111 DONE=1000
+    wire [3:0] core_state;
+    assign debug_core_state = core_state[2:0];
     wire [1:0] lsu_states [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [THREADS_PER_BLOCK-1:0] active_mask [WARPS_PER_CORE-1:0];
 
@@ -206,7 +209,7 @@ module core #(
     // An 18-byte operand buffer bridges the "18 operands vs 2-operand datapath"
     // gap: MACL pushes one register per instruction (9 pixels, then 9 weights);
     // MAC reads the unit's result. Thread 0 drives the buffer (SIMT-uniform).
-    localparam UPDATE_STATE = 3'b110;
+    localparam UPDATE_STATE = 4'b0111;
     // Pixel buffer only: the 9 conv weights are CONSTANT (part of the trained
     // model) and baked below, so a conv window just pushes 9 pixels with MACL.
     reg  [7:0] mac_buf [0:7];
