@@ -84,51 +84,63 @@ module lsu #(
 
             mem_we <= 1'b0;
 
-            if (lsu_state == 2'b00) begin
-                // Waiting for a new request from the active warp
-                if (core_state == 4'b0100 && thread_active && warp_active) begin
+            case (lsu_state)
+                // ---- 00 IDLE: wake at REQUEST, capture read/write intent ----
+                // Do NOT form the address yet: rs/rt are latched by the register
+                // file AT REQUEST, so they only become valid next cycle. Issuing
+                // here would use the previous instruction's operands (a load-use
+                // hazard). Defer the actual issue to state 01.
+                2'b00: if (core_state == 4'b0100 && thread_active && warp_active) begin
                     if (decoded_mem_read) begin
-                        lsu_state <= 2'b10; // Skip 01, go straight to WAITING
-                        active_is_read <= 1;
-                        active_is_write <= 0;
-                        mem_valid <= 1;
-                        mem_addr <= base + rs;
+                        active_is_read  <= 1'b1;
+                        active_is_write <= 1'b0;
+                        lsu_state       <= 2'b01;
                     end else if (decoded_mem_write) begin
-                        active_is_read <= 0;
-                        active_is_write <= 1;
-                        if (rs == MMIO_TX) begin
-                            emit_valid <= 1;
-                            emit_data <= rt;
-                            lsu_state <= 2'b10;
-                        end else begin
-                            mem_we <= 1;
-                            mem_waddr <= wbase + rs;
-                            mem_wdata <= rt;
-                            lsu_state <= 2'b11; // Done immediately
-                        end
+                        active_is_read  <= 1'b0;
+                        active_is_write <= 1'b1;
+                        lsu_state       <= 2'b01;
                     end
                 end
-            end else if (active_is_write) begin
-                case (lsu_state)
-                    2'b10: if (emit_ready) begin
-                        emit_valid <= 1'b0;
-                        lsu_state  <= 2'b11;
-                    end
-                    // Wait until warp is active and in UPDATE to return to IDLE
-                    2'b11: if (warp_active && core_state == 4'b0111) lsu_state <= 2'b00;
-                endcase
-            end else if (active_is_read) begin
-                case (lsu_state)
-                    2'b10: begin
-                        if (mem_ready) begin
-                            mem_valid <= 0;
-                            lsu_out <= mem_read_data;
+
+                // ---- 01 ISSUE: rs/rt are valid now -> form the address/data ----
+                2'b01: begin
+                    if (active_is_read) begin
+                        mem_valid <= 1'b1;
+                        mem_addr  <= base + rs;
+                        lsu_state <= 2'b10;
+                    end else begin
+                        if (rs == MMIO_TX) begin
+                            emit_valid <= 1'b1;            // offset 63 -> UART TX
+                            emit_data  <= rt;
+                            lsu_state  <= 2'b10;
+                        end else begin
+                            mem_we    <= 1'b1;             // commit a BRAM write
+                            mem_waddr <= wbase + rs;
+                            mem_wdata <= rt;
                             lsu_state <= 2'b11;
                         end
                     end
-                    2'b11: if (warp_active && core_state == 4'b0111) lsu_state <= 2'b00;
-                endcase
-            end
+                end
+
+                // ---- 10 WAIT: read for mem_ready, emit for emit_ready ----
+                2'b10: begin
+                    if (active_is_read) begin
+                        if (mem_ready) begin
+                            mem_valid <= 1'b0;
+                            lsu_out   <= mem_read_data;
+                            lsu_state <= 2'b11;
+                        end
+                    end else begin
+                        if (emit_ready) begin
+                            emit_valid <= 1'b0;
+                            lsu_state  <= 2'b11;
+                        end
+                    end
+                end
+
+                // ---- 11 DONE: hold until this warp's UPDATE, then re-arm ----
+                2'b11: if (warp_active && core_state == 4'b0111) lsu_state <= 2'b00;
+            endcase
         end
     end
 endmodule
