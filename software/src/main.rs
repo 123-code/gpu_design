@@ -119,6 +119,10 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         // STR Rdata,[Raddr]  ->  addr in [8:6], data in [2:0]
         "STR" => vec![w(0b1011, 0, reg(&toks[2]), reg(&toks[1]) & 7)],
         "RET" => vec![0xF000],
+        // SYNC: RET opcode with bit 0 set -> decoder raises decoded_sync, which
+        // pops the warp's reconvergence stack (run the other side of a divergent
+        // branch). No new opcode needed.
+        "SYNC" => vec![0xF001],
 
         // ---- FC-MAC + argmax coprocessor (opcode 0000, sub-fn in [5:4]) ----
         "FRST" => vec![0x0000],                                   // [5:4]=00 reset engine

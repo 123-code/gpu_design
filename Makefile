@@ -5,7 +5,7 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim sim-loadrun build flash flash-persist asm demo record clean
+.PHONY: sim sim-loadrun sim-divergence build flash flash-persist asm demo record clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
@@ -15,6 +15,11 @@ sim-loadrun:    ## General load->run->readback: stream a kernel+data over UART, 
 	cd software && cargo run --quiet -- sum_kernel.asm sum_kernel.hex
 	$(IVERILOG) -g2012 -s tb -o sim_loadrun test/tb_loadrun.sv src/*.sv
 	$(VVP) sim_loadrun
+
+sim-divergence: ## Validate per-lane SIMT branch divergence (lanes take different paths)
+	cd software && cargo run --quiet -- divergence_kernel.asm divergence_kernel.hex
+	$(IVERILOG) -g2012 -s tb -o sim_divergence test/tb_divergence.sv src/*.sv
+	$(VVP) sim_divergence
 
 demo:           ## Serve the draw-a-digit web demo at http://localhost:8000
 	python3 demo/server.py
