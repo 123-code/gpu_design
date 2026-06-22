@@ -73,6 +73,7 @@ module core #(
     wire decoded_sync; // NEW
     
     wire current_warp;
+    wire [WARPS_PER_CORE-1:0] warp_emit;   // per-warp: thread 0 has a UART emit in flight
     wire [THREADS_PER_BLOCK-1:0] branch_votes;
     wire [THREADS_PER_BLOCK-1:0] all_branch_votes [WARPS_PER_CORE-1:0];
     assign branch_votes = all_branch_votes[current_warp];
@@ -132,6 +133,7 @@ module core #(
         .decoded_pc_mux(decoded_pc_mux),
         .decoded_immediate(decoded_immediate),
         .branch_votes(branch_votes),
+        .warp_emit(warp_emit),
         
         .current_warp(current_warp),
         .warp_pc(warp_pc),
@@ -175,8 +177,33 @@ module core #(
 
     wire lsu_emit_valid [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [7:0] lsu_emit_data [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    assign emit_valid = lsu_emit_valid[current_warp][0];
-    assign emit_data  = lsu_emit_data[current_warp][0];
+
+    // ---- Emit ownership latch ----
+    // A warp emits (thread 0 STR to offset 63) by raising lsu_emit_valid[w][0]
+    // and holding it until emit_ready. The scheduler can context-switch away
+    // mid-handshake, so route the UART by a LATCHED owner (held until the byte
+    // is acked) rather than current_warp, and steer emit_ready to that owner
+    // only — otherwise a context switch tears/misroutes the byte. (Hardcoded for
+    // 2 warps, matching the rest of the multi-warp logic.)
+    reg emit_owned;
+    reg emit_owner;
+    always @(posedge clk) begin
+        if (reset) begin
+            emit_owned <= 1'b0;
+            emit_owner <= 1'b0;
+        end else if (!emit_owned) begin
+            if      (lsu_emit_valid[0][0]) begin emit_owned <= 1'b1; emit_owner <= 1'b0; end
+            else if (lsu_emit_valid[1][0]) begin emit_owned <= 1'b1; emit_owner <= 1'b1; end
+        end else if (emit_ready) begin
+            emit_owned <= 1'b0;                 // byte acked -> release the UART
+        end
+    end
+    assign emit_valid = emit_owned && lsu_emit_valid[emit_owner][0];
+    assign emit_data  = lsu_emit_data[emit_owner][0];
+
+    // Per-warp emit-in-flight flag for the scheduler's emit-stall (thread 0).
+    assign warp_emit[0] = lsu_emit_valid[0][0];
+    assign warp_emit[1] = lsu_emit_valid[1][0];
 
     wire lsu_we [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [ADDR_BITS-1:0] lsu_waddr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
@@ -357,7 +384,8 @@ module core #(
 
                     .emit_valid(lsu_emit_valid[w][i]),
                     .emit_data(lsu_emit_data[w][i]),
-                    .emit_ready(emit_ready),
+                    // Only the warp that currently owns the UART sees the ack.
+                    .emit_ready((emit_owned && emit_owner == w) ? emit_ready : 1'b0),
 
                     .lsu_state(lsu_states[w][i]),
                     .lsu_out(lsu_out_bus[w][i])

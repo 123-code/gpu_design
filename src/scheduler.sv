@@ -10,7 +10,8 @@ module scheduler #(
     input wire start,//signal from the dispatcher to begin execution
     input wire decoded_ret,//comes from the instruction decoder,turns on on RET instruction, means the program must halt if this is high, we no longer fetch, we go to DONE
     input wire [1:0] lsu_state [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0],//signals from the lsu to indicate its state
-    
+    input wire [WARPS_PER_CORE-1:0] warp_emit,  // thread 0 of warp w has a UART emit in flight
+
     // Divergence signals
     input wire decoded_sync,
     input wire decoded_pc_mux,
@@ -56,12 +57,15 @@ module scheduler #(
         end else begin
             // 1. Monitor LSU for WAITING warps to wake them up
             reg [WARPS_PER_CORE-1:0] warp_is_waiting;
+            reg [WARPS_PER_CORE-1:0] warp_issuing;   // any thread in LSU state 01 (just issued)
             for (integer w = 0; w < WARPS_PER_CORE; w = w + 1) begin
                 warp_is_waiting[w] = 0;
+                warp_issuing[w]    = 0;
                 for (integer i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin
                     if (lsu_state[w][i] == 2'b01 || lsu_state[w][i] == 2'b10) begin
                         warp_is_waiting[w] = 1;
                     end
+                    if (lsu_state[w][i] == 2'b01) warp_issuing[w] = 1;
                 end
                 
                 // Wake up if it was waiting and LSU is done
@@ -97,13 +101,23 @@ module scheduler #(
                 core_state <= WAIT;    
             end
             WAIT: begin //checking if the threads are busy, checks if threads are reading, writing to RAM
-                if (warp_is_waiting[current_warp]) begin
-                    // Context Switch! This warp needs memory. Park it.
+                if (warp_emit[current_warp]) begin
+                    // UART emit in flight: STALL on this warp (do not yield). A
+                    // UART write has no latency to hide, and yielding would let
+                    // the other warp interleave its framed output. Stay until the
+                    // byte is acked (emit clears -> warp_emit drops).
+                    core_state <= WAIT;
+                end else if (warp_issuing[current_warp]) begin
+                    // LSU just issued (state 01); wait one cycle so we can tell a
+                    // memory read (yield) from an emit (stall) next cycle.
+                    core_state <= WAIT;
+                end else if (warp_is_waiting[current_warp]) begin
+                    // Memory read in flight: park this warp and hide the latency.
                     warp_status[current_warp] <= WARP_WAITING;
-                    core_state <= SELECT_WARP; 
+                    core_state <= SELECT_WARP;
                 end else begin
                     // No memory needed, math can execute.
-                    core_state <= EXECUTE; 
+                    core_state <= EXECUTE;
                 end
             end
             EXECUTE: begin//performs operations, moves to update, operatins must be done in a single clock cycle
