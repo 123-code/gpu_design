@@ -235,18 +235,22 @@ module core #(
     assign instruction_address = warp_pc[current_warp];
 
     // ==========================================
-    // THE 3x3 MAC FUNCTIONAL UNIT (shared, core-level)
+    // THE VECTOR MAC FUNCTIONAL UNIT (shared, core-level)
     // ==========================================
-    // An 18-byte operand buffer bridges the "18 operands vs 2-operand datapath"
-    // gap: MACL pushes one register per instruction (9 pixels, then 9 weights);
-    // MAC reads the unit's result. Thread 0 drives the buffer (SIMT-uniform).
+    // vector_mac is a STATIC 8-lane multiply-accumulate: 8 parallel signed
+    // multipliers + a fixed adder tree (see vector_mac.sv). It always sums all 8
+    // lanes; there is no programmable length. Operands reach it through two 8-slot
+    // buffers below: each MACL pushes one (pixel=rs, weight=rt) PAIR and bumps
+    // mac_wptr (capped at 8); MAC then fires and reads the 8-lane dot product.
+    // Push up to 8 pairs before firing; unused slots keep their previous value and
+    // still contribute, so zero them (or push a full 8) if you need a shorter dot
+    // product. Thread 0 drives the buffers (SIMT-uniform). For an arbitrary-length
+    // accumulation use the FC unit instead (fc_mac.sv: FMAC accumulates per cycle).
     localparam UPDATE_STATE = 4'b0111;
-    // Pixel buffer only: the 9 conv weights are CONSTANT (part of the trained
-    // model) and baked below, so a conv window just pushes 9 pixels with MACL.
     // Small operand buffers (stay in FFs: written at a variable index but read at
     // constant indices by vector_mac, so GowinSynthesis does not RAM-infer them).
-    reg  [7:0] mac_buf [0:7];
-    reg  [7:0] weight_buf [0:7]; // 8 slots, 8 bits each.
+    reg  [7:0] mac_buf [0:7];    // 8 pixel slots
+    reg  [7:0] weight_buf [0:7]; // 8 weight slots
     reg  [3:0] mac_wptr;
     wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11)
                           && !decoded_fc_read;

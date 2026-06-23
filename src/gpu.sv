@@ -2,10 +2,10 @@
 `timescale 1ns/1ns
 
 module gpu #(
-    // Launch size (threads per block). Default 4 -> one warp per core (no
-    // redundant second warp). Set to 8 to launch both warps with distinct
-    // global thread IDs.
-    parameter BLOCK_DIM = 4
+    // Launch size (threads per block). Default 8 -> 2 warps per core, with
+    // distinct global thread IDs (warp0 = 0..3, warp1 = 4..7). Set to 4 to launch
+    // a single warp (no redundant second warp) for 4-thread kernels.
+    parameter BLOCK_DIM = 8
 ) (
     input wire clk,//clock input
     input wire reset,//reset signal, clears internal states to 0

@@ -22,7 +22,7 @@ module top #(
     parameter PAYLOAD_BYTES = 1568,      // 2 x 784
     parameter CLK_FREQ      = 27000000,  // for the UART bit timing (override in sim)
     parameter BAUD_RATE     = 115200, //baud rate
-    parameter BLOCK_DIM     = 4          // threads per block (4 = one warp/core; 8 = both warps)
+    parameter BLOCK_DIM     = 8          // threads per block (8 = 2 warps/core; 4 = one warp)
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
