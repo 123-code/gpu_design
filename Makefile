@@ -5,7 +5,7 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 build flash flash-persist asm demo record clean
+.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 build build-oss flash flash-oss flash-persist asm demo record clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
@@ -47,6 +47,12 @@ asm:            ## Re-assemble software/test_kernel.asm -> software/kernel.hex
 
 build:          ## Synthesize + place & route -> impl/pnr/tiny_gpu.fs
 	./build_fpga.sh
+
+build-oss:      ## Open-source bitstream (yosys+nextpnr+apicula). GowinSynthesis crashes on this design; set OSS_CAD_SUITE first
+	bash oss_build/run_oss.sh
+
+flash-oss:      ## Flash the open-source-built bitstream into SRAM
+	openFPGALoader -b tangnano20k oss_build/tiny_gpu_oss.fs
 
 flash:          ## Load the bitstream into SRAM (volatile, gone on power cycle)
 	./flash.sh

@@ -5,7 +5,16 @@ impl/
 # iverilog simulation outputs
 gpu_sim
 mac_sim
+sim_loadrun
+sim_divergence
+sim_divmerge
+sim_warps
+sim_mac32
 *.vcd
+
+# Open-source build flow generated artifacts (run_oss.sh is kept; *.fs already ignored)
+oss_build/tiny_gpu.v
+oss_build/*.json
 
 # Rust assembler build
 software/target/

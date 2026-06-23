@@ -36,13 +36,21 @@ module scheduler #(
     localparam WARP_READY = 2'b00, WARP_WAITING = 2'b01, WARP_DONE = 2'b10;
     reg [1:0] warp_status [WARPS_PER_CORE-1:0];
 
-    // Divergence Stacks (Per Warp)
-    reg [7:0] stack_pc [WARPS_PER_CORE-1:0][3:0];
-    reg [THREADS_PER_BLOCK-1:0] stack_mask [WARPS_PER_CORE-1:0][3:0];
-    reg [1:0] stack_ptr [WARPS_PER_CORE-1:0];
+    // Divergence Stacks (Per Warp), SDEPTH reconvergence levels each.
+    //
+    // Stored as flat PACKED bit-vectors, not unpacked arrays, ON PURPOSE:
+    // GowinSynthesis tries to infer any single-read-port unpacked array as block
+    // RAM and SIGSEGVs building its address decoder, and this toolchain version
+    // has no syn_ramstyle support to opt out. Packed vectors accessed with a
+    // variable `+:` part-select synthesize as plain logic muxes, so they are
+    // never RAM-inferred. Entry for warp w, level d lives at flat index w*SDEPTH+d.
+    localparam SDEPTH = 4;                                            // levels per warp
+    reg [WARPS_PER_CORE*SDEPTH*8-1:0]                 stack_pc;       // 8-bit PC per entry
+    reg [WARPS_PER_CORE*SDEPTH*THREADS_PER_BLOCK-1:0] stack_mask;     // mask per entry
+    reg [WARPS_PER_CORE*2-1:0]                        stack_ptr;      // 2-bit ptr per warp
     // Mask active just before a (single-level) divergence, restored when the
     // reconvergence stack empties so post-merge code runs on all those lanes.
-    reg [THREADS_PER_BLOCK-1:0] base_mask [WARPS_PER_CORE-1:0];
+    reg [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0]        base_mask;      // mask per warp
 
     wire [THREADS_PER_BLOCK-1:0] want_to_branch = branch_votes & active_mask[current_warp];
     wire [THREADS_PER_BLOCK-1:0] want_to_stay   = (~branch_votes) & active_mask[current_warp];
@@ -54,7 +62,7 @@ module scheduler #(
             current_warp <= 0;
             for (integer w = 0; w < WARPS_PER_CORE; w = w + 1) begin
                 warp_pc[w] <= 0;
-                stack_ptr[w] <= 0;
+                stack_ptr[w*2 +: 2] <= 2'b0;
                 // Launch-bounds (NVIDIA-style): only spin up the warps the
                 // block actually needs. A warp whose first lane is past
                 // BLOCK_DIM starts DONE so it never runs; a partially-full
@@ -66,10 +74,10 @@ module scheduler #(
                 for (integer i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin
                     if (w * THREADS_PER_BLOCK + i < BLOCK_DIM) begin
                         active_mask[w][i] <= 1'b1;
-                        base_mask[w][i]   <= 1'b1;
+                        base_mask[w*THREADS_PER_BLOCK + i] <= 1'b1;
                     end else begin
                         active_mask[w][i] <= 1'b0;
-                        base_mask[w][i]   <= 1'b0;
+                        base_mask[w*THREADS_PER_BLOCK + i] <= 1'b0;
                     end
                 end
             end
@@ -140,30 +148,35 @@ module scheduler #(
                 end
             end
             EXECUTE: begin//performs operations, moves to update, operatins must be done in a single clock cycle
-                core_state <= UPDATE;  
+                reg [1:0]  sp;          // this warp's current stack pointer
+                integer    e_pop, e_push; // flat stack entry index (w*SDEPTH + level)
+                core_state <= UPDATE;
+                sp = stack_ptr[current_warp*2 +: 2];
                 if (decoded_sync) begin
-                    if (stack_ptr[current_warp] > 0) begin
-                        warp_pc[current_warp] <= stack_pc[current_warp][stack_ptr[current_warp] - 1];
-                        active_mask[current_warp] <= stack_mask[current_warp][stack_ptr[current_warp] - 1];
-                        stack_ptr[current_warp] <= stack_ptr[current_warp] - 1;
+                    if (sp > 0) begin
+                        e_pop = current_warp*SDEPTH + (sp - 1);
+                        warp_pc[current_warp]     <= stack_pc[e_pop*8 +: 8];
+                        active_mask[current_warp] <= stack_mask[e_pop*THREADS_PER_BLOCK +: THREADS_PER_BLOCK];
+                        stack_ptr[current_warp*2 +: 2] <= sp - 1;
                     end else begin
                         // Stack empty: the divergent region is fully reconverged.
                         // Restore the pre-divergence mask so the common code that
                         // follows runs on ALL lanes that were active going in
                         // (otherwise only the last-popped lanes stay awake).
                         warp_pc[current_warp]     <= warp_pc[current_warp] + 1;
-                        active_mask[current_warp] <= base_mask[current_warp];
+                        active_mask[current_warp] <= base_mask[current_warp*THREADS_PER_BLOCK +: THREADS_PER_BLOCK];
                     end
                 end else if (decoded_pc_mux) begin
                     if (want_to_branch != 0 && want_to_stay != 0) begin
                         // Divergence! Remember the full mask (only at the outermost
                         // divergence) so the matching reconverging SYNC can restore
                         // it, then push the 'stay' lanes and run the branch lanes.
-                        if (stack_ptr[current_warp] == 0)
-                            base_mask[current_warp] <= active_mask[current_warp];
-                        stack_pc[current_warp][stack_ptr[current_warp]] <= warp_pc[current_warp] + 1;
-                        stack_mask[current_warp][stack_ptr[current_warp]] <= want_to_stay;
-                        stack_ptr[current_warp] <= stack_ptr[current_warp] + 1;
+                        if (sp == 0)
+                            base_mask[current_warp*THREADS_PER_BLOCK +: THREADS_PER_BLOCK] <= active_mask[current_warp];
+                        e_push = current_warp*SDEPTH + sp;
+                        stack_pc[e_push*8 +: 8] <= warp_pc[current_warp] + 1;
+                        stack_mask[e_push*THREADS_PER_BLOCK +: THREADS_PER_BLOCK] <= want_to_stay;
+                        stack_ptr[current_warp*2 +: 2] <= sp + 1;
 
                         warp_pc[current_warp] <= decoded_immediate;
                         active_mask[current_warp] <= want_to_branch;

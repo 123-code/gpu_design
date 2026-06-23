@@ -16,7 +16,7 @@ add_file src/lsu.sv
 add_file src/lsu_arbiter.sv
 add_file src/scheduler.sv
 add_file src/program_memory.sv
-add_file src/mac_array_3x3.v
+add_file src/vector_mac.sv
 add_file src/fc_mac.sv
 add_file src/core.sv
 add_file src/dispatcher.sv

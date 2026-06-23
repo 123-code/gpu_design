@@ -243,8 +243,10 @@ module core #(
     localparam UPDATE_STATE = 4'b0111;
     // Pixel buffer only: the 9 conv weights are CONSTANT (part of the trained
     // model) and baked below, so a conv window just pushes 9 pixels with MACL.
+    // Small operand buffers (stay in FFs: written at a variable index but read at
+    // constant indices by vector_mac, so GowinSynthesis does not RAM-infer them).
     reg  [7:0] mac_buf [0:7];
-    reg  [7:0] weight_buf [0:7]; // memory buffer 8 slots, 8 bits each. 
+    reg  [7:0] weight_buf [0:7]; // 8 slots, 8 bits each.
     reg  [3:0] mac_wptr;
     wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11)
                           && !decoded_fc_read;

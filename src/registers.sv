@@ -64,7 +64,9 @@ module registers #(
     // ==========================================
     // PART 5: THE INTERNAL VAULT (The Memory Cells)
     // ==========================================
-    // This creates an array of 16 slots, where each slot holds an 8-bit wire bundle
+    // This creates an array of 16 slots, where each slot holds an 8-bit wire bundle.
+    // (Stays in flip-flops: it has many read ports, so GowinSynthesis keeps it as
+    // registers rather than inferring RAM.)
     reg [7:0] registers[15:0];
 
     // Debug tap (declared after the register array so the assign is legal)
