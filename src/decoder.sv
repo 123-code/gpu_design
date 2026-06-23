@@ -48,6 +48,10 @@ module decoder (
     output reg decoded_fc_arg,     // FARG : finalize current digit (add bias, argmax)
     output reg decoded_fc_read,    // FBEST: rd <- best_idx (uses the MAC writeback mux)
 
+    // Which 8-bit slice of the 32-bit MAC/FC result to write back (MAC Rd,#n).
+    // 0 = [7:0] (LSB) ... 3 = [31:24] (MSB). 0 for every non-MAC instruction.
+    output reg [1:0] decoded_mac_byte,
+
     // identity register (R15/R13/R14) into rd. The selector reuses the rs field
     // (decoded_rs_address): 1->threadIdx, 2->blockIdx, 3->blockDim.
     output reg decoded_id_read,
@@ -111,6 +115,7 @@ module decoder (
             decoded_fc_mac <= 0;
             decoded_fc_arg <= 0;
             decoded_fc_read <= 0;
+            decoded_mac_byte <= 0;
             decoded_id_read <= 0;
             decoded_sync <= 0;
 
@@ -149,6 +154,7 @@ module decoder (
                 decoded_fc_mac <= 0;
                 decoded_fc_arg <= 0;
                 decoded_fc_read <= 0;
+                decoded_mac_byte <= 0;
                 decoded_id_read <= 0;
                 decoded_sync <= 0;
 
@@ -207,9 +213,12 @@ module decoder (
                         decoded_mac_load <= 1;
                     end
                     MAC: begin
-                        // Fire the MAC and write its result into rd
+                        // Fire the MAC and write the selected byte of its 32-bit
+                        // result into rd. instruction[1:0] picks the byte
+                        // (MAC Rd,#n); bare MAC Rd encodes #0 = low byte.
                         decoded_reg_write_enable <= 1;
                         decoded_reg_input_mux    <= MUX_MAC;
+                        decoded_mac_byte         <= instruction[1:0];
                     end
                     BRn: begin
                         // Branch: tell pc.sv to route the jump target into the PC

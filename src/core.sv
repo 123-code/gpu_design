@@ -72,6 +72,7 @@ module core #(
     wire decoded_fc_read;
     wire decoded_id_read;
     wire decoded_sync; // NEW
+    wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
     
     wire current_warp;
     wire [WARPS_PER_CORE-1:0] warp_emit;   // per-warp: thread 0 has a UART emit in flight
@@ -114,7 +115,8 @@ module core #(
         .decoded_fc_arg(decoded_fc_arg),
         .decoded_fc_read(decoded_fc_read),
         .decoded_id_read(decoded_id_read),
-        .decoded_sync(decoded_sync)
+        .decoded_sync(decoded_sync),
+        .decoded_mac_byte(decoded_mac_byte)
     );
 
     // ==========================================
@@ -264,8 +266,7 @@ module core #(
 
 
     wire [31:0] vector_result_32;
-    wire [7:0] mac_result = vector_result_32[7:0]; // Taking the lowest 8 bits for now
-    
+
     vector_mac u_mac (
         .clk(clk),
         .rst_n(~reset),
@@ -285,8 +286,7 @@ module core #(
     // it (SIMT-uniform). FCLR/FMAC act in UPDATE; FRD reads it back through the
     // MAC writeback mux (mux==11 with decoded_fc_read selecting fc over conv).
     wire [31:0] fc_result_32;
-    wire [7:0] fc_result = fc_result_32[7:0]; // Taking the lowest 8 bits for now
-    
+
     fc_mac u_fc (
         .clk(clk),
         .reset(reset),
@@ -300,7 +300,15 @@ module core #(
     );
 
     // Writeback source for the shared MAC mux: conv MAC normally, FC readout on FRD.
-    wire [7:0] mac_or_fc_result = decoded_fc_read ? fc_result : mac_result;
+    // Both units produce a 32-bit result; decoded_mac_byte (from MAC Rd,#n) picks
+    // which 8-bit slice reaches the 8-bit register file, so software can pull the
+    // whole 32-bit value out across four reads. Bare MAC / FBEST => byte 0 (LSB).
+    wire [31:0] mac_or_fc_result_32 = decoded_fc_read ? fc_result_32 : vector_result_32;
+    wire [7:0] mac_or_fc_result =
+          (decoded_mac_byte == 2'd0) ? mac_or_fc_result_32[7:0]
+        : (decoded_mac_byte == 2'd1) ? mac_or_fc_result_32[15:8]
+        : (decoded_mac_byte == 2'd2) ? mac_or_fc_result_32[23:16]
+        :                              mac_or_fc_result_32[31:24];
 
     genvar w, i;
     generate

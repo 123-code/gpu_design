@@ -109,7 +109,10 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "CMP" => vec![w(0b0011, 0, reg(&toks[1]), reg(&toks[2]))],
         "LDR" => vec![w(0b0100, reg(&toks[1]), reg(&toks[2]), 0)],
         "MACL" => vec![w(0b0110, 0, reg(&toks[1]), 0)],
-        "MAC" => vec![w(0b0111, reg(&toks[1]), 0, 0)],
+        // MAC Rd       -> write byte 0 (LSB) of the 32-bit MAC result into Rd
+        // MAC Rd, #n   -> write byte n (0..3) — read the full 32-bit result in 4 ops
+        "MAC" => vec![w(0b0111, reg(&toks[1]), 0,
+                        toks.get(2).map_or(0, |t| imm(t) & 0b11))],
         // BRn target (8-bit, into [7:0]); condition = N flag in [11:9]
         "BRn" => vec![(0b1000 << 12) | (0b100 << 9) | (target(&toks[1]) & 0xff)],
         "ADDB" => vec![w(0b1001, 0, 0, imm(&toks[1]))],

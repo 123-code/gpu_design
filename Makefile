@@ -5,7 +5,7 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps build flash flash-persist asm demo record clean
+.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 build flash flash-persist asm demo record clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
@@ -30,6 +30,11 @@ sim-warps:      ## Prove 2 warps run distinct global thread IDs (BLOCK_DIM=8 -> 
 	cd software && cargo run --quiet -- tid_demo.asm tid_demo.hex
 	$(IVERILOG) -g2012 -s tb -o sim_warps test/tb_warps.sv src/*.sv
 	$(VVP) sim_warps
+
+sim-mac32:      ## Prove the full 32-bit MAC result reads back via MAC Rd,#n (4 bytes -> 4800)
+	cd software && cargo run --quiet -- mac_read32.asm mac_read32.hex
+	$(IVERILOG) -g2012 -s tb -o sim_mac32 test/tb_mac32.sv src/*.sv
+	$(VVP) sim_mac32
 
 demo:           ## Serve the draw-a-digit web demo at http://localhost:8000
 	python3 demo/server.py
