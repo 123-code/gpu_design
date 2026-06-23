@@ -19,7 +19,9 @@ module uart_tx #(
     localparam IDLE = 2'b00, START_BIT = 2'b01, DATA_BITS = 2'b10, STOP_BIT = 2'b11;
     reg [1:0] state;
     
-    reg [7:0] clock_count;    // Counts to 234
+    reg [15:0] clock_count;   // counts up to BAUD_LIMIT-1; must be wide enough:
+                              // 54 MHz/115200 = 468 overflows 8 bits, so 16 bits
+                              // (matches uart_rx's tick). 8 bits broke TX at 54 MHz.
     reg [2:0] bit_index;      // Counts which of the 8 data bits we are sending
     reg [7:0] shift_register; // Holds the matrix answer while we send it
 
