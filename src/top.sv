@@ -20,7 +20,16 @@ module top #(
     // each core runs the whole Conv->Pool->Scatter->FC pipeline on its image.
     // Reply: [digit0][cycles0 x3][digit1][cycles1 x3] = 8 bytes.
     parameter PAYLOAD_BYTES = 1568,      // 2 x 784
-    parameter CLK_FREQ      = 27000000,  // for the UART bit timing (override in sim)
+    // sys_clk frequency for UART bit timing. Must match the ACTUAL clock:
+    //   normal build (rPLL)            -> 81 MHz  (theoretical max, 27x3)
+    //   -DPLL_BYPASS_DIAG (no PLL)     -> 27 MHz, straight off the crystal
+    // NOTE: uart_tx.clock_count must be wide enough to hold CLK_FREQ/BAUD_RATE
+    // (703 at 81 MHz) — it is [15:0]. Override CLK_FREQ in sim.
+`ifdef PLL_BYPASS_DIAG
+    parameter CLK_FREQ      = 27000000,
+`else
+    parameter CLK_FREQ      = 81000000,
+`endif
     parameter BAUD_RATE     = 115200, //baud rate
     parameter BLOCK_DIM     = 8          // threads per block (8 = 2 warps/core; 4 = one warp)
 ) (
@@ -29,16 +38,19 @@ module top #(
     output wire       uart_tx_out,   // to host         (PIN 69)
     output wire [5:0] led            // leds to show result on them
 );
-    // ---- system power-on reset, holds on closed for 15 clock cycles ----
-    reg [3:0] por = 4'd0; //forcing the counter to wake up at 0 
-    wire por_done = &por;
+    // ---- system clock: 27 MHz crystal pin -> 54 MHz via the rPLL ----
+    // (gowin_pll is a transparent pass-through in simulation, so tbs drive sys_clk
+    // with their own clk and CLK_FREQ.) Everything below runs on sys_clk.
+    wire sys_clk;
+    wire pll_lock;
+    gowin_pll u_pll (.clkin(clk), .clkout(sys_clk), .lock(pll_lock));
 
-    //on every clock tick, the circuit checks the por done wire, if 0, we route por through adder  to count 
-    // if por is 1, the statement becomes false and the counter stays frozen
-    always @(posedge clk) if (!por_done) por <= por + 1'b1;
-    // we neeed to flip the por done wire, because it is a 1 when "ready to run" but sys reset is 0 when ready to run
-    //ys reset means essentially : "should everything be kept rozen?"
-    wire sys_reset = !por_done;
+    // ---- system power-on reset: held until the PLL locks AND the POR counter fills ----
+    reg [3:0] por = 4'd0; //forcing the counter to wake up at 0
+    wire por_done = &por;
+    always @(posedge sys_clk) if (!por_done) por <= por + 1'b1;
+    // sys_reset is high (everything frozen) until the clock is stable (lock) and POR done.
+    wire sys_reset = !por_done || !pll_lock;
 
     // ---- Host-to-Device pipeline ----
     wire        gpu_start, loading; // gpu start is high when the image was loaded loading is high while image is still loading from dma
@@ -65,7 +77,7 @@ module top #(
         .CLK_FREQ(CLK_FREQ),
         .BAUD_RATE(BAUD_RATE)
     ) pipe (
-        .clk(clk), .reset(sys_reset),
+        .clk(sys_clk), .reset(sys_reset),
         .uart_rx_in(uart_rx_in),
         .gpu_done(done),              // GPU done -> DMA re-arms for next frame
         .gpu_start(gpu_start),
@@ -89,7 +101,7 @@ module top #(
     // On gpu_start, briefly hold reset then release + enable for exactly one run.
     reg        armed  = 1'b0;//gpu start wire on, starts at 0, fires when on 
     reg [4:0]  runrst = 5'd0;//5 bit counter
-    always @(posedge clk) begin
+    always @(posedge sys_clk) begin
         if (sys_reset)        begin armed <= 1'b0; runrst <= 5'd0; end
         //if gpu start, we set the armed register to 1 and the runrst counter to 0
         else if (gpu_start)   begin armed <= 1'b1; runrst <= 5'd0; end // new run
@@ -104,7 +116,7 @@ module top #(
     reg        emit_ready;//ready to send out data
 //ports open to the gpu, ehich contsins dispatecer, program memory,compute cores
     gpu #(.BLOCK_DIM(BLOCK_DIM)) uut (
-        .clk(clk),
+        .clk(sys_clk),
         .reset(gpu_reset),
         .enable(gpu_enable),
         .result(result),
@@ -136,7 +148,7 @@ module top #(
     reg  tx_start;
     localparam E_IDLE = 2'd0, E_SEND = 2'd1, E_WAIT = 2'd2;
     reg [1:0] estate;
-    always @(posedge clk) begin
+    always @(posedge sys_clk) begin
         if (sys_reset) begin
             estate <= E_IDLE; tx_start <= 1'b0; emit_ready <= 1'b0;
         end else begin
@@ -159,7 +171,7 @@ module top #(
     end
 
     uart_tx #(.BAUD_LIMIT(CLK_FREQ / BAUD_RATE)) u_tx (
-        .clk(clk), .reset(sys_reset),
+        .clk(sys_clk), .reset(sys_reset),
         .data_in(emit_data), .tx_start(tx_start),
         .tx_out(uart_tx_out), .tx_busy(uart_busy)
     );
