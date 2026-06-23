@@ -21,7 +21,8 @@ module top #(
     // Reply: [digit0][cycles0 x3][digit1][cycles1 x3] = 8 bytes.
     parameter PAYLOAD_BYTES = 1568,      // 2 x 784
     parameter CLK_FREQ      = 27000000,  // for the UART bit timing (override in sim)
-    parameter BAUD_RATE     = 115200 //baud rate 
+    parameter BAUD_RATE     = 115200, //baud rate
+    parameter BLOCK_DIM     = 4          // threads per block (4 = one warp/core; 8 = both warps)
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
@@ -102,7 +103,7 @@ module top #(
     wire [7:0] emit_data;//byte ti send
     reg        emit_ready;//ready to send out data
 //ports open to the gpu, ehich contsins dispatecer, program memory,compute cores
-    gpu uut (
+    gpu #(.BLOCK_DIM(BLOCK_DIM)) uut (
         .clk(clk),
         .reset(gpu_reset),
         .enable(gpu_enable),

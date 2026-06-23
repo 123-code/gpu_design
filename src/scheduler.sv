@@ -2,8 +2,9 @@
 `timescale 1ns/1ns
 
 module scheduler #(
-    parameter THREADS_PER_BLOCK = 4,
-    parameter WARPS_PER_CORE = 2
+    parameter THREADS_PER_BLOCK = 4,   // lanes per warp (the warp size)
+    parameter WARPS_PER_CORE = 2,
+    parameter BLOCK_DIM = THREADS_PER_BLOCK  // launch size: how many threads this block runs
 ) (
     input wire clk,//clock inputv
     input wire reset,//reset signal
@@ -52,11 +53,25 @@ module scheduler #(
             done <= 0;
             current_warp <= 0;
             for (integer w = 0; w < WARPS_PER_CORE; w = w + 1) begin
-                warp_status[w] <= WARP_READY;
                 warp_pc[w] <= 0;
-                active_mask[w] <= {THREADS_PER_BLOCK{1'b1}};
-                base_mask[w] <= {THREADS_PER_BLOCK{1'b1}};
                 stack_ptr[w] <= 0;
+                // Launch-bounds (NVIDIA-style): only spin up the warps the
+                // block actually needs. A warp whose first lane is past
+                // BLOCK_DIM starts DONE so it never runs; a partially-full
+                // warp predicates off its out-of-range lanes.
+                if (w * THREADS_PER_BLOCK < BLOCK_DIM)
+                    warp_status[w] <= WARP_READY;
+                else
+                    warp_status[w] <= WARP_DONE;
+                for (integer i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin
+                    if (w * THREADS_PER_BLOCK + i < BLOCK_DIM) begin
+                        active_mask[w][i] <= 1'b1;
+                        base_mask[w][i]   <= 1'b1;
+                    end else begin
+                        active_mask[w][i] <= 1'b0;
+                        base_mask[w][i]   <= 1'b0;
+                    end
+                end
             end
         end else begin
             // 1. Monitor LSU for WAITING warps to wake them up

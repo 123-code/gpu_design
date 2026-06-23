@@ -1,7 +1,12 @@
 `default_nettype none
 `timescale 1ns/1ns
 
-module gpu (
+module gpu #(
+    // Launch size (threads per block). Default 4 -> one warp per core (no
+    // redundant second warp). Set to 8 to launch both warps with distinct
+    // global thread IDs.
+    parameter BLOCK_DIM = 4
+) (
     input wire clk,//clock input
     input wire reset,//reset signal, clears internal states to 0
     input wire enable,//when on, gpu issues thread blocks
@@ -108,7 +113,8 @@ module gpu (
 
     // COMPUTE CORE 0 (Fully Wired)
     core #(
-        .THREADS_PER_BLOCK(4)
+        .THREADS_PER_BLOCK(4),
+        .BLOCK_DIM(BLOCK_DIM)
     ) compute_core_0 (
         .clk(clk),
         .reset(reset),
@@ -143,7 +149,8 @@ module gpu (
     // through the same UART, after core 0's bytes (see the emit FSM below);
     // until then its LSU just stalls on the handshake.
     core #(
-        .THREADS_PER_BLOCK(4)
+        .THREADS_PER_BLOCK(4),
+        .BLOCK_DIM(BLOCK_DIM)
     ) compute_core_1 (
         .clk(clk),
         .reset(reset),

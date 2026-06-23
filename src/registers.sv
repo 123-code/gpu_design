@@ -4,7 +4,8 @@
 module registers #(
     // Hardware compilation variables. These set the read-only Thread IDs.
     parameter THREADS_PER_BLOCK = 4,
-    parameter THREAD_ID = 0,
+    parameter THREAD_ID = 0,                  // GLOBAL thread index within the block
+    parameter BLOCK_DIM = THREADS_PER_BLOCK,  // launch size reported as %blockDim
     parameter DATA_BITS = 8
 ) (
     // ==========================================
@@ -85,8 +86,8 @@ module registers #(
 
             // Initialize the 3 hardware-coded SIMD identity registers [cite: 336, 337, 338]
             registers[13] <= 8'b0;              // %blockIdx (Updates later)
-            registers[14] <= THREADS_PER_BLOCK; // %blockDim 
-            registers[15] <= THREAD_ID;         // %threadIdx
+            registers[14] <= BLOCK_DIM;         // %blockDim (launch size, not warp size)
+            registers[15] <= THREAD_ID;         // %threadIdx (global within the block)
 
         end else if (enable) begin 
             // Update the block ID dynamically

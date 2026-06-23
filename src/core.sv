@@ -2,8 +2,9 @@
 `timescale 1ns/1ns
 
 module core #(
-    parameter THREADS_PER_BLOCK = 4, // defines how many threads run in parallel within this core
+    parameter THREADS_PER_BLOCK = 4, // lanes per warp (the warp size)
     parameter WARPS_PER_CORE = 2,    // Stage 2: Multiple warps for latency hiding
+    parameter BLOCK_DIM = THREADS_PER_BLOCK, // launch size: how many threads this block runs
     parameter ADDR_BITS = 13         // width of data memory address
 ) (
     input wire clk,//clock
@@ -121,7 +122,8 @@ module core #(
     // ==========================================
     scheduler #(
         .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
-        .WARPS_PER_CORE(WARPS_PER_CORE)
+        .WARPS_PER_CORE(WARPS_PER_CORE),
+        .BLOCK_DIM(BLOCK_DIM)
     ) core_scheduler (
         .clk(clk),
         .reset(reset),
@@ -326,7 +328,11 @@ module core #(
 
                 registers #(
                     .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
-                    .THREAD_ID(i)
+                    // GLOBAL thread index: warp w lane i -> w*warpSize + i.
+                    // (warp0 = 0..3, warp1 = 4..7) so the two warps cover
+                    // DISTINCT threads instead of redundantly running 0..3.
+                    .THREAD_ID(w * THREADS_PER_BLOCK + i),
+                    .BLOCK_DIM(BLOCK_DIM)
                 ) thread_regs (
                     .clk(clk),
                     .reset(reset),
