@@ -10,6 +10,7 @@ sim_divergence
 sim_divmerge
 sim_warps
 sim_mac32
+sim_mlp
 *.vcd
 
 # Open-source build flow generated artifacts (run_oss.sh is kept; *.fs already ignored)

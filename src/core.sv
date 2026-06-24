@@ -226,9 +226,29 @@ module core #(
     wire lsu_we [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [ADDR_BITS-1:0] lsu_waddr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [7:0] lsu_wdata [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    assign mem_we    = lsu_we[current_warp][0];
-    assign mem_waddr = lsu_waddr[current_warp][0];
-    assign mem_wdata = lsu_wdata[current_warp][0];
+
+    // Per-lane write requests serialized onto the single memory write port by the
+    // write arbiter (mirrors the read arbiter above). This is what lets every lane
+    // store its own result instead of only thread 0 (e.g. one neuron per lane).
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] we_req_flat;
+    wire [ADDR_BITS-1:0] waddr_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [7:0]           wdata_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] wgrant_flat;
+
+    lsu_write_arbiter #(
+        .THREADS(WARPS_PER_CORE * THREADS_PER_BLOCK),
+        .ADDR_BITS(ADDR_BITS)
+    ) core_lsu_write_arbiter (
+        .clk(clk),
+        .reset(reset),
+        .we_req(we_req_flat),
+        .waddr(waddr_flat),
+        .wdata(wdata_flat),
+        .mem_we(mem_we),
+        .mem_waddr(mem_waddr),
+        .mem_wdata(mem_wdata),
+        .wgrant(wgrant_flat)
+    );
 
     // Shared Arbiter (handles all warps and threads simultaneously)
     lsu_arbiter #(
@@ -412,9 +432,10 @@ module core #(
                     .mem_ready(arb_ready[flat_id]),
                     .mem_read_data(arb_rdata[flat_id]),
 
-                    .mem_we(lsu_we[w][i]),
-                    .mem_waddr(lsu_waddr[w][i]),
-                    .mem_wdata(lsu_wdata[w][i]),
+                    .we_req(lsu_we[w][i]),
+                    .waddr(lsu_waddr[w][i]),
+                    .wdata(lsu_wdata[w][i]),
+                    .wgrant(wgrant_flat[flat_id]),
 
                     .emit_valid(lsu_emit_valid[w][i]),
                     .emit_data(lsu_emit_data[w][i]),
@@ -425,9 +446,14 @@ module core #(
                     .lsu_out(lsu_out_bus[w][i])
                 );
 
-                // Tie Arbiter flattened arrays
+                // Tie read-arbiter flattened arrays
                 assign lsu_req[flat_id] = lsu_mem_valid[w][i];
                 assign lsu_addr[flat_id] = lsu_mem_addr[w][i];
+
+                // Tie write-arbiter flattened arrays
+                assign we_req_flat[flat_id] = lsu_we[w][i];
+                assign waddr_flat[flat_id]  = lsu_waddr[w][i];
+                assign wdata_flat[flat_id]  = lsu_wdata[w][i];
 
                 pc thread_pc (
                     .clk(clk),
