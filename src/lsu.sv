@@ -29,10 +29,14 @@ module lsu #(
     input wire mem_ready,                // "flag from memory controller indicating the data has been sent"
     input wire [7:0] mem_read_data,      // Payload from RAM
 
-    // Write port back to main memory (STR to a non-MMIO address). 1-cycle pulse.
-    output reg                  mem_we,//write enable, memory can overwrite whatever is at target address
-    output reg [ADDR_BITS-1:0]  mem_waddr, //13 bit target address for writing 
-    output reg [7:0]            mem_wdata,//data to be written
+    // Write REQUEST to the per-core write arbiter (STR to a non-MMIO address).
+    // we_req is HELD until the arbiter grants this lane (wgrant), serializing all
+    // lanes' writes onto main_memory's single write port. (Was a direct 1-cycle
+    // port pulse hardwired to lane 0; now EVERY lane can write its own result.)
+    output reg                  we_req,
+    output reg [ADDR_BITS-1:0]  waddr,
+    output reg [7:0]            wdata,
+    input  wire                 wgrant,   // 1-cycle ack from the write arbiter
 
     // Memory-mapped emit (STR to offset 63 -> UART TX). Handshake throttles the
     // GPU to UART speed: emit_valid holds until emit_ready, stalling the scheduler.
@@ -69,10 +73,10 @@ module lsu #(
             mem_valid <= 0;
             mem_addr <= '0;
             
-            mem_we <= 0;
-            mem_waddr <= '0;
-            mem_wdata <= 0;
-            
+            we_req <= 0;
+            waddr <= '0;
+            wdata <= 0;
+
             active_is_read <= 0;
             active_is_write <= 0;
         end else if (enable) begin
@@ -81,8 +85,6 @@ module lsu #(
                 base <= base + decoded_immediate;
             if (decoded_wbase_add && core_state == 4'b0111 && warp_active)
                 wbase <= wbase + decoded_immediate;
-
-            mem_we <= 1'b0;
 
             case (lsu_state)
                 // ---- 00 IDLE: wake at REQUEST, capture read/write intent ----
@@ -114,15 +116,15 @@ module lsu #(
                             emit_data  <= rt;
                             lsu_state  <= 2'b10;
                         end else begin
-                            mem_we    <= 1'b1;             // commit a BRAM write
-                            mem_waddr <= wbase + rs;
-                            mem_wdata <= rt;
-                            lsu_state <= 2'b11;
+                            we_req    <= 1'b1;             // request a BRAM write
+                            waddr     <= wbase + rs;
+                            wdata     <= rt;
+                            lsu_state <= 2'b10;            // wait for the arbiter grant
                         end
                     end
                 end
 
-                // ---- 10 WAIT: read for mem_ready, emit for emit_ready ----
+                // ---- 10 WAIT: read->mem_ready, emit->emit_ready, write->wgrant ----
                 2'b10: begin
                     if (active_is_read) begin
                         if (mem_ready) begin
@@ -130,10 +132,16 @@ module lsu #(
                             lsu_out   <= mem_read_data;
                             lsu_state <= 2'b11;
                         end
-                    end else begin
+                    end else if (emit_valid) begin
                         if (emit_ready) begin
                             emit_valid <= 1'b0;
                             lsu_state  <= 2'b11;
+                        end
+                    end else begin
+                        // memory write: hold we_req until the arbiter grants us
+                        if (wgrant) begin
+                            we_req    <= 1'b0;
+                            lsu_state <= 2'b11;
                         end
                     end
                 end

@@ -5,7 +5,7 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist asm demo record clean
+.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist asm demo record clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
@@ -36,6 +36,11 @@ sim-mac32:      ## Prove the full 32-bit MAC result reads back via MAC Rd,#n (4 
 	$(IVERILOG) -g2012 -s tb -o sim_mac32 test/tb_mac32.sv src/*.sv
 	$(VVP) sim_mac32
 
+sim-mlp:        ## Parallel FC layer: 9 lanes each compute+write their own neuron (per-lane write path)
+	cd software && cargo run --quiet -- mlp_parallel.asm mlp_parallel.hex
+	$(IVERILOG) -g2012 -s tb -o sim_mlp test/tb_mlp.sv src/*.sv
+	$(VVP) sim_mlp
+
 demo:           ## Serve the draw-a-digit web demo at http://localhost:8000
 	python3 demo/server.py
 
@@ -54,11 +59,11 @@ build-oss:      ## Open-source bitstream (yosys+nextpnr+apicula). GowinSynthesis
 flash-oss:      ## Flash the open-source-built bitstream into SRAM
 	openFPGALoader -b tangnano20k oss_build/tiny_gpu_oss.fs
 
-build-oss-max:  ## MAX-throughput bitstream: 2 cores x 1 warp x 12 lanes = 24 ALU lanes (77% LUT, 127 MHz). Set OSS_CAD_SUITE first
-	bash oss_build/build_cfg.sh 1 12 12 tiny_gpu_max24
+build-oss-max:  ## MAX AI-capable bitstream: 2 cores x 1 warp x 9 lanes = 18 ALU lanes, per-lane writes (78% LUT, 140 MHz). Set OSS_CAD_SUITE first
+	bash oss_build/build_cfg.sh 1 9 9 tiny_gpu_max18
 
-flash-oss-max:  ## Flash the 24-lane MAX bitstream into SRAM
-	openFPGALoader -b tangnano20k oss_build/tiny_gpu_max24.fs
+flash-oss-max:  ## Flash the 18-lane MAX bitstream into SRAM
+	openFPGALoader -b tangnano20k oss_build/tiny_gpu_max18.fs
 
 flash:          ## Load the bitstream into SRAM (volatile, gone on power cycle)
 	./flash.sh
