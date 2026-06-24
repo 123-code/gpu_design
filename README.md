@@ -1,25 +1,48 @@
 # tiny-gpu on the Tang Nano 20K — a GPU running a CNN
 
-A minimal **SIMT GPU core** in SystemVerilog (with a Rust assembler) synthesized to a
-**Sipeed Tang Nano 20K** (Gowin GW2AR-18C) that runs a **real trained convolutional
-neural network end-to-end on-chip**. You stream a 28×28 MNIST image to the board over
-UART; the GPU runs the whole pipeline — **convolution → ReLU/quantize → max-pool →
-fully-connected → argmax** — and sends back the predicted digit. No host-side compute.
+A minimal, dual core SIMT GPU in SystemVerilog,synthesized to a Sipeed Tang Nano 20K FPGA. 
 
-The GPU is a genuine little SIMT machine (4-thread warps, scheduler, dispatcher, register
-file, ALU, load/store unit), and the heavy matrix math runs in MAC coprocessors the GPU
-drives — the same division of labor as tensor cores on a real GPU. It is deliberately
-*tiny* (8-bit datapath, single 3×3 conv filter, 256-instruction ROM); accuracy on the
-bundled 50-image test set is ~94%. But it is, honestly, a GPU executing an AI model.
+
+
+The GPU has two independent compute cores, each core has its own multi warp scheduler, stack based flow control for branch divergence and reconvergence, global thread indexing, and a dedicated MAC coproccessor for heavy matrix math( imitating the role of tensor cores in an NVIDIA GPU)
+
 
 ## Architecture
+**Central Dispatcher:** At the top level a central dispatcher manages two completely independent compute cores: core0 and core1. Each core is physically instantiated with:
 
-**One SIMT core (`core.sv`).** A warp scheduler and decoder drive four thread lanes in
-lockstep; each lane has its own registers, ALU, LSU, and PC. The four lanes share an LSU
-arbiter (1 memory port) and two MAC coprocessors — `mac_array_3x3` (conv) and `fc_mac`
-(FC + argmax) — that thread 0 feeds SIMT-uniformly.
+- its own 8kb data memory on BSRAM
+- its own 256-word instruction ROM
+
+
+
+**SIMT core** Each SIMT core is governed by a centralized hardware scheduler and a decoder, the default configuration manages 2 warps per core, and implements 4 physical ALU lanes. Warps are interleaved dynamically, every indepentent thread osseses its own:
+-Registers: A 16 slot register file
+-Program Counter: Instruction pointers
+-Load store unit: allow threads to read from one memory region and store to another.
 
 ![tiny-gpu single core](docs/core_detail.png)
+
+
+**Zero-Penalty Context Switching:** Because a full instruction takes 6 clock cycles (Fetch -> Decode -> Request -> Wait -> Execute -> Update), the ALUs are mostly idle. The 2 warps time multiplex the 4 ALUs. If warp 0 issues a memory read, the scheduler parks it in a WAIT state, and connects the ALUs to warp 1. This design hides memory latency without stalling the pipeline
+
+**Hardware Branch Divergence:** SIMT requires threads to execute in lockstep. To handle situations where threads within a warp evaluate an if/else statement differently (divergence), we use a thread mask. This mask controls the write-enable pin for the registers and memory; if a thread's mask bit is 0, it is "asleep" and its state cannot change.
+
+Because the entire warp shares a single Program Counter, divergent paths must be executed one after the other. The scheduler manages this using a Hardware Reconvergence Stack:
+
+When a branch splits, the scheduler pushes the mask of the sleeping threads and the address of the untaken path onto the stack, and runs the active path.
+At the end of the path, a SYNC instruction tells the hardware to pop the stack.
+The hardware jumps to the untaken path and swaps the mask—putting the first group of threads to sleep and waking up the second group.
+Once both sides of the branch finish (the stack is empty), the hardware restores the full mask so the entire warp can reconverge and run the following code in lockstep.
+
+**32 Bit Math Coprocessors:**
+he GPU operates on a strict 8-bit datapath to save FPGA logic, which isn't enough for the massive accumulations in CNNs. To solve this, Thread 0 of the active warp drives two 32-bit coprocessors:
+
+Vector MAC: An 8-lane multiplier tree. Threads buffer 8 pixel/weight pairs, then fire a single MAC instruction to compute 8 parallel products and accumulate them in one cycle.
+FC Accumulator: A persistent 32-bit accumulator for the fully-connected layers.
+To get these massive 32-bit results back into the 8-bit register file, the hardware uses a byte-select multiplexer. Software issues MAC Rd, #n to safely slice out byte n (0 through 3) of the coprocessor's output.
+
+**Extreme Parametrization:**Because the RTL relies entirely on parameters rather than hardcoded widths, the architecture is highly malleable. Using the build-oss-max target in the Makefile, you can drop the latency-hiding (WARPS_PER_CORE = 1) and widen the ALUs to 12 physical lanes per core, instantly compiling a 24-lane GPU that hits 127 MHz.
+
 
 **The whole chip.** Two of those cores sit under a dispatcher, fed by the host UART → DMA →
 memory chain, with the result emitted back over UART. Every block name matches a module in
