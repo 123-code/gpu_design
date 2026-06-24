@@ -50,25 +50,52 @@ memory chain, with the result emitted back over UART. Every block name matches a
 
 ![tiny-gpu architecture](docs/gpu_overview.png)
 
-## Status
+## Instruction Set Architecture (16-bit)
 
-- ✅ **Full MNIST CNN runs on the FPGA.** Five images streamed back-to-back (no reflash)
-  classify correctly: `7, 2, 0, 9, 9`.
-- ✅ **Bit-exact to a Python reference** in simulation: conv map 676/676, pooled 169/169,
-  end-to-end predictions match `software/mnist_ref.py` on every image tested.
-- ✅ Closes timing at the native **27 MHz** clock (0 setup / 0 hold violations).
+Every instruction is a 16-bit word, decoded strictly as:
+`[15:12]` opcode · `[11:9]` rd · `[8:6]` rs · `[5:0]` imm (register rt in `[2:0]`).
 
-## Demo — draw a digit, watch the GPU read it
+| Opcode | Mnemonic | Meaning / Operation |
+|--------|----------|---------|
+| `0000` | `FRST`/`FMAC`<br>`FARG`/`FBEST` | **FC-MAC Coprocessor** (sub-fn in `[5:4]`): reset / `acc+=rs*rt` / finalize digit (add int32 bias, latch logit score) / read logit LSB. |
+| `0001` | `ADD rd,rs,rt` | rd = rs + rt |
+| `0010` | `MOV rd,#imm` | rd = imm (6-bit immediate) |
+| `0010` | `TID`/`BID`<br>`BDIM rd` | `MOV` with `rs`≠0: rd = threadIdx (R15) / blockIdx (R13) / blockDim (R14) |
+| `0011` | `CMP rs,rt` | set N/Z/P flags (Negative, Zero, Positive) |
+| `0100` | `LDR rd,[rs]` | rd = mem[rbase + rs] (Load from Memory) |
+| `0101` | `ADDI rd,rs,#imm` | rd = rs + imm |
+| `0110` | `MACL rs` | Push an operand pair into the 8-lane Vector MAC buffer. |
+| `0111` | `MAC rd, #n` | Fire the Vector MAC → slice byte `#n` (0-3) of the 32-bit sum into rd. |
+| `1000` | `BRn target` | Branch if N (8-bit target, pushes mask to stack on divergence). |
+| `1001` | `ADDB #imm` / `WBASE #imm` | Advance read base / write base (`[11]` selects). |
+| `1010` | `MUL rd,rs,rt` | rd = rs · rt |
+| `1011` | `STR rt,[rs]` | mem[wbase + rs] = rt (Store to Memory. Note: rs==63 → UART TX) |
+| `1100`/`1101`/`1110` | `SHR`/`SHL`/`SUB` | Bit shift right / Bit shift left / Subtract |
+| `1111` | `RET` | Halt thread |
+| `1111` | `SYNC` | Pop the reconvergence stack, swap active thread mask (`[0]`=1). |
+| *(pseudo)* | `MAX rd,ra,rb` | Assembler-expanded macro (`CMP` + `BRn` + `ADDI`). |
 
-![tiny-gpu pipeline demo](docs/demo.png)
+> **Note on Registers:** Only **R0–R7** are instruction-addressable (3-bit fields). R13–R15 are SIMT identity registers, readable via `TID`/`BID`/`BDIM` (which copy them into an R0–R7 register).
 
-A browser canvas streams your digit to the board; the page then animates every stage of
-the on-chip pipeline — **input 28×28 → conv 26×26 → max-pool 13×13 → FC logits → argmax** —
-and shows the predicted digit with the real on-chip run time.
+### Programming the tiny-gpu: Key Hardware Quirks
 
-```sh
-make demo            # serves http://localhost:8000
-```
+Writing assembly for this GPU requires understanding a few custom hardware features designed to maximize CNN performance on a minimal FPGA footprint.
+
+#### 1. SIMT Branch Divergence (`BRn` and `SYNC`)
+Because all threads in a warp share a single Program Counter, they must execute in lockstep. If a `CMP` evaluates differently for different threads, a `BRn` instruction will cause **divergence**. 
+* The hardware automatically pushes the sleeping threads' mask and the untaken path's address onto a **Reconvergence Stack**, and runs the active path.
+* You **must** place a `SYNC` instruction at the end of the branch. This pops the stack, swapping the thread mask to run the opposite path, and eventually reconverging the warp.
+
+#### 2. The 8-bit to 32-bit Boundary (`MAC`, `MACL`)
+The GPU uses a strict 8-bit datapath to save logic, but CNN accumulations require 32-bit math. 
+* Use `MACL` to stream operand pairs into the 8-lane Vector MAC.
+* When you fire `MAC Rd, #n`, the coprocessor generates a massive 32-bit sum. Because `Rd` is only 8 bits, use the byte-selector `#n` (0 through 3) to extract specific 8-bit slices of the result one by one.
+
+#### 3. Identity and Divergent Loads (`TID`)
+To process parallel data, threads need to know who they are. Fetching `TID` (Thread ID) allows the 8 lanes to diverge their memory access. For example: `TID R1` followed by `LDR R2,[R1]` loads `mem[threadIdx]` for each individual lane.
+
+
+
 
 Two ways to run it:
 
@@ -90,18 +117,6 @@ Two ways to run it:
 > 169/169) — so they show exactly what the chip computed, without a firmware change to
 > dump the intermediate BRAMs.
 
-### Recording a GIF/clip
-
-To capture the looping GIF for this section, screen-record the live page on the real
-board and convert (macOS):
-
-```sh
-# record the browser window with QuickTime / ⇧⌘5, save out.mov, then:
-ffmpeg -i out.mov -vf "fps=18,scale=900:-1:flags=lanczos" -loop 0 docs/demo.gif
-#   or, sharper/smaller:  brew install gifski && gifski --fps 18 --width 900 -o docs/demo.gif frames/*.png
-```
-
-Then swap `docs/demo.png` above for `docs/demo.gif`.
 
 ## How it works
 
@@ -121,55 +136,6 @@ Then swap `docs/demo.png` above for `docs/demo.gif`.
    PC ◀──UART──  predicted digit (1 byte)
 ```
 
-All weights/biases are **baked into the bitstream** (trained model from the companion
-`cnn_chip` project): conv weights into the MAC coprocessor, FC weights into a BRAM buffer,
-biases into the FC-MAC ROM. The host sends only the image.
-
-The full datapath (GPU core + coprocessors + memory/DMA + UART) is laid out in
-[`docs/architecture.md`](docs/architecture.md):
-
-![architecture](docs/architecture.svg)
-
-### Data-memory map (8 KB BRAM, `ADDR_BITS=13`)
-
-| range        | contents                                   | written by |
-|--------------|--------------------------------------------|------------|
-| `0 .. 783`   | 28×28 input image                          | DMA (host) |
-| `1024..1699` | 26×26 conv feature map                     | GPU (`STR`) |
-| `1700..1868` | 13×13 pooled map                           | GPU (`STR`) |
-| `2048..5427` | FC buffer: `[feature, weight]×1690`         | weights baked; features scattered by GPU |
-| `[63]`       | memory-mapped UART TX (emit)               | GPU (`STR 63`) |
-
-The LSU has **two base pointers** so a stage can read one region and write another:
-`rbase` (advanced by `ADDB`) for loads, `wbase` (advanced by `WBASE`) for stores.
-
-## Instruction set (16-bit)
-
-`[15:12]` opcode · `[11:9]` rd · `[8:6]` rs · `[5:0]` imm (register rt in `[2:0]`).
-
-| opcode | mnemonic | meaning |
-|--------|----------|---------|
-| `0000` | `FRST`/`FMAC`/`FARG`/`FBEST` | FC-MAC coprocessor (sub-fn in `[5:4]`): reset / `acc+=rs*rt` / finalize digit (add int32 bias, argmax) / read predicted digit |
-| `0001` | `ADD rd,rs,rt` | rd = rs + rt |
-| `0010` | `MOV rd,#imm` | rd = imm (6-bit) |
-| `0010` | `TID`/`BID`/`BDIM rd` | `MOV` with `rs`≠0: rd = threadIdx (R15) / blockIdx (R13) / blockDim (R14) |
-| `0011` | `CMP rs,rt` | set N/Z/P flags |
-| `0100` | `LDR rd,[rs]` | rd = mem[rbase + rs] |
-| `0101` | `ADDI rd,rs,#imm` | rd = rs + imm |
-| `0110` | `MACL rs` | push a pixel into the 3×3 MAC buffer |
-| `0111` | `MAC rd` | fire the 3×3 MAC (baked weights) → rd |
-| `1000` | `BRn target` | branch if N (8-bit target, reaches whole ROM) |
-| `1001` | `ADDB #imm` / `WBASE #imm` | advance read base / write base (`[11]` selects) |
-| `1010` | `MUL rd,rs,rt` | rd = rs · rt |
-| `1011` | `STR rt,[rs]` | mem[wbase + rs] = rt (rs==63 → UART TX) |
-| `1100`/`1101`/`1110` | `SHR`/`SHL`/`SUB` | shifts / subtract |
-| `1111` | `RET` | halt thread |
-| *(pseudo)* | `MAX rd,ra,rb` | assembler-expanded (`CMP`+`BRn`+`ADDI`) |
-
-Only **R0–R7** are instruction-addressable (3-bit fields); R13–R15 are SIMT identity regs,
-readable via `TID`/`BID`/`BDIM` (which copy them into an R0–R7 register). With `TID`, the 4
-lanes finally diverge — e.g. `TID R1` then `LDR R2,[R1]` loads `mem[threadIdx]` per lane. See
-`software/divergent_load.asm` and `test/tb_tid.sv`.
 
 ## Synthesis & utilization (Tang Nano 20K · GW2AR-18C)
 
@@ -185,29 +151,7 @@ From `impl/pnr/tiny_gpu.rpt.html` (full Conv→Pool→FC pipeline build):
 | I/O ports             | 9                                   | 66        | 14 %  |
 | PLL                   | 0                                   | 2         | 0 %   |
 
-**Timing:** 27 MHz constraint (37.037 ns) — **Actual Fmax ≈ 77.6 MHz**, 0 setup / 0 hold
-violations (~2.9× headroom). DSPs = the 3×3 conv MAC + the FC-MAC multiplier; BSRAM =
-8 KB data memory + the FC weight buffer + the instruction ROM.
-
-## Build & run
-
-```sh
-make sim                       # self-checking simulation (5*3=15 sanity kernel)
-cd software && cargo run -- mnist_full.asm mnist_full.hex   # assemble the CNN kernel
-./build_fpga.sh                # synthesize + place&route -> impl/pnr/tiny_gpu.fs
-FS=$(pwd)/impl/pnr/tiny_gpu.fs ./flash.sh                    # load into SRAM
-```
-
-Then classify an image (host streams 784 bytes, reads back the digit):
-
-```sh
-cd software
-python3 mnist_ref.py 0          # writes mnist_data/image0.hex (and reference dumps)
-python3 send_mnist.py mnist_data/image0.hex     # -> predicted digit (7)
-```
-
-`mnist_ref.py` is a faithful software model of the exact RTL pipeline; use it to generate
-images for any index in the bundled batch and to check predictions.
+**Timing:** 
 
 ## Flashing — the reliable recipe (read this, it'll save you an hour)
 
