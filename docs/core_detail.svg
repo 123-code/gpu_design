@@ -18,7 +18,7 @@
 
   <rect width="1240" height="700" fill="#ffffff"/>
   <text x="620" y="34" text-anchor="middle" font-size="24" font-weight="bold" class="lbl">core.sv — one SIMT compute core</text>
-  <text x="620" y="56" text-anchor="middle" font-size="12" class="sub">4 threads/block · block names match src/*.sv · thread 0 is SIMT-uniform (drives stores, MACs &amp; emit)</text>
+  <text x="620" y="56" text-anchor="middle" font-size="12" class="sub">8 threads (2 warps × 4 lanes) time-multiplexed · block names match src/*.sv · thread 0 is SIMT-uniform</text>
 
   <!-- external interfaces -->
   <rect x="40" y="80" width="250" height="48" class="blk ctrl"/>
@@ -37,7 +37,7 @@
 
   <!-- scheduler + decoder -->
   <rect x="48" y="188" width="560" height="54" class="blk ctrl"/>
-  <text x="328" y="210" text-anchor="middle" font-size="13" class="lbl">core_scheduler — warp FSM</text>
+  <text x="328" y="210" text-anchor="middle" font-size="13" class="lbl">core_scheduler — multi-warp FSM + reconv stack</text>
   <text x="328" y="228" text-anchor="middle" class="sub">FETCH→DECODE→REQUEST→WAIT→EXECUTE→UPDATE → core_state</text>
   <rect x="628" y="188" width="562" height="54" class="blk ctrl"/>
   <text x="909" y="210" text-anchor="middle" font-size="13" class="lbl">core_decoder</text>
@@ -99,16 +99,16 @@
 
   <!-- functional units row -->
   <rect x="48" y="560" width="360" height="52" class="blk comp"/>
-  <text x="228" y="582" text-anchor="middle" font-size="12" class="lbl">mac_array_3x3 (u_mac)</text>
-  <text x="228" y="599" text-anchor="middle" class="sub">3×3 conv · baked int8 weights · DSP</text>
+  <text x="228" y="582" text-anchor="middle" font-size="12" class="lbl">vector_mac (u_mac)</text>
+  <text x="228" y="599" text-anchor="middle" class="sub">8-lane static vector MAC · DSP</text>
   <rect x="430" y="560" width="360" height="52" class="blk comp"/>
   <text x="610" y="582" text-anchor="middle" font-size="12" class="lbl">fc_mac (u_fc)</text>
-  <text x="610" y="599" text-anchor="middle" class="sub">32-bit acc + int32 bias · argmax</text>
+  <text x="610" y="599" text-anchor="middle" class="sub">32-bit acc + int32 bias · raw logit score</text>
   <rect x="810" y="560" width="380" height="52" class="blk ctrl"/>
   <text x="1000" y="582" text-anchor="middle" font-size="12" class="lbl">core_lsu_arbiter</text>
-  <text x="1000" y="599" text-anchor="middle" class="sub">4 lanes → 1 main_memory read/write port</text>
+  <text x="1000" y="599" text-anchor="middle" class="sub">async server (8 threads → 1 read port)</text>
 
-  <text x="619" y="640" text-anchor="middle" class="sub">thread 0 pushes the 9-pixel conv window / FC operands; results return to the registers via the writeback mux</text>
+  <text x="619" y="640" text-anchor="middle" class="sub">thread 0 pushes operands; 32-bit results are sliced via MAC Rd, #n byte-select mux back into 8-bit registers</text>
 
   <!-- wires: program_memory -> decoder -->
   <path class="wire" d="M480,128 L480,140 L909,140 L909,188"/>
