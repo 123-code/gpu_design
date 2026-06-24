@@ -31,7 +31,9 @@ module top #(
     parameter CLK_FREQ      = 81000000,
 `endif
     parameter BAUD_RATE     = 115200, //baud rate
-    parameter BLOCK_DIM     = 8          // threads per block (8 = 2 warps/core; 4 = one warp)
+    parameter BLOCK_DIM     = 8,         // launch size: threads per block (warps x TPB lanes)
+    parameter THREADS_PER_BLOCK = 4,     // warp width = physical ALU lanes per core
+    parameter WARPS_PER_CORE = 2         // warps/core (1 = no latency hiding, max compute/LUT)
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
@@ -107,7 +109,16 @@ module top #(
         else if (gpu_start)   begin armed <= 1'b1; runrst <= 5'd0; end // new run
         else if (armed && !(&runrst)) runrst <= runrst + 1'b1;
     end
-    wire gpu_reset  = sys_reset || !armed || !(&runrst); //on when chip on power reset, no job armed, startup countdown not finished
+    // Register the GPU reset. gpu_reset fans out to every flop in the design, so
+    // driving it from combinational logic (sys_reset || !armed || ...) put a long
+    // high-fanout combinational net on the critical path (POR/pll-lock gate ->
+    // wide-accumulator CLEAR pins). Registering it makes the fanned-out net a
+    // clean FF source with the whole clock period to propagate; the extra cycle of
+    // reset-deassert latency is harmless (the run already waits out POR + runrst).
+    reg gpu_reset_r = 1'b1;
+    always @(posedge sys_clk)
+        gpu_reset_r <= sys_reset || !armed || !(&runrst);
+    wire gpu_reset  = gpu_reset_r;
     wire gpu_enable = armed && (&runrst); //on when job armed, startup countdown finished
 
     // ---- the GPU ----
@@ -115,7 +126,8 @@ module top #(
     wire [7:0] emit_data;//byte ti send
     reg        emit_ready;//ready to send out data
 //ports open to the gpu, ehich contsins dispatecer, program memory,compute cores
-    gpu #(.BLOCK_DIM(BLOCK_DIM)) uut (
+    gpu #(.BLOCK_DIM(BLOCK_DIM), .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+          .WARPS_PER_CORE(WARPS_PER_CORE)) uut (
         .clk(sys_clk),
         .reset(gpu_reset),
         .enable(gpu_enable),

@@ -15,6 +15,9 @@ sim_mac32
 # Open-source build flow generated artifacts (run_oss.sh is kept; *.fs already ignored)
 oss_build/tiny_gpu.v
 oss_build/*.json
+# Per-config sweep/build intermediates (build_cfg.sh / area_sweep.sh outputs; large PnR JSONs)
+oss_build/cfg/
+oss_build/sweep/
 
 # Rust assembler build
 software/target/

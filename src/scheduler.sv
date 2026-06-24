@@ -107,16 +107,23 @@ module scheduler #(
                 if (start) core_state <= SELECT_WARP; 
             end
             SELECT_WARP: begin
-                // Simple Round-Robin Warp Picker
-                if (warp_status[0] == WARP_READY) begin
-                    current_warp <= 0;
-                    core_state <= FETCH;
-                end else if (warp_status[1] == WARP_READY) begin
-                    current_warp <= 1;
-                    core_state <= FETCH;
-                end else if (warp_status[0] == WARP_DONE && warp_status[1] == WARP_DONE) begin
-                    core_state <= DONE;
+                // Lowest-index READY warp wins (loop form so it works for any
+                // WARPS_PER_CORE, including 1). If none are READY and every warp
+                // is DONE, the block is finished.
+                reg        sw_found;
+                reg        sw_all_done;
+                integer    sw;
+                sw_found    = 1'b0;
+                sw_all_done = 1'b1;
+                for (sw = 0; sw < WARPS_PER_CORE; sw = sw + 1) begin
+                    if (!sw_found && warp_status[sw] == WARP_READY) begin
+                        current_warp <= sw[0];   // 1-bit (WARPS_PER_CORE <= 2)
+                        sw_found = 1'b1;
+                    end
+                    if (warp_status[sw] != WARP_DONE) sw_all_done = 1'b0;
                 end
+                if (sw_found)            core_state <= FETCH;
+                else if (sw_all_done)    core_state <= DONE;
             end
             FETCH: begin //fetching the next instruction
                 core_state <= DECODE;

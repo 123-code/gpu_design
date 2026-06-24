@@ -190,14 +190,24 @@ module core #(
     // only — otherwise a context switch tears/misroutes the byte. (Hardcoded for
     // 2 warps, matching the rest of the multi-warp logic.)
     reg emit_owned;
-    reg emit_owner;
+    reg emit_owner;                  // 1-bit owner id (WARPS_PER_CORE <= 2)
+    integer ew;
+    reg     ew_found;
     always @(posedge clk) begin
         if (reset) begin
             emit_owned <= 1'b0;
             emit_owner <= 1'b0;
         end else if (!emit_owned) begin
-            if      (lsu_emit_valid[0][0]) begin emit_owned <= 1'b1; emit_owner <= 1'b0; end
-            else if (lsu_emit_valid[1][0]) begin emit_owned <= 1'b1; emit_owner <= 1'b1; end
+            // Lowest-index warp with thread 0's emit valid claims the UART (loop
+            // form so it works for any WARPS_PER_CORE, including 1).
+            ew_found = 1'b0;
+            for (ew = 0; ew < WARPS_PER_CORE; ew = ew + 1) begin
+                if (!ew_found && lsu_emit_valid[ew][0]) begin
+                    emit_owned <= 1'b1;
+                    emit_owner <= ew[0];
+                    ew_found = 1'b1;
+                end
+            end
         end else if (emit_ready) begin
             emit_owned <= 1'b0;                 // byte acked -> release the UART
         end
@@ -206,8 +216,12 @@ module core #(
     assign emit_data  = lsu_emit_data[emit_owner][0];
 
     // Per-warp emit-in-flight flag for the scheduler's emit-stall (thread 0).
-    assign warp_emit[0] = lsu_emit_valid[0][0];
-    assign warp_emit[1] = lsu_emit_valid[1][0];
+    genvar gw;
+    generate
+        for (gw = 0; gw < WARPS_PER_CORE; gw = gw + 1) begin : warp_emit_gen
+            assign warp_emit[gw] = lsu_emit_valid[gw][0];
+        end
+    endgenerate
 
     wire lsu_we [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [ADDR_BITS-1:0] lsu_waddr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
