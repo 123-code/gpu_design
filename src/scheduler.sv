@@ -18,6 +18,10 @@ module scheduler #(
     input wire decoded_pc_mux,
     input wire [7:0] decoded_immediate,
     input wire [THREADS_PER_BLOCK-1:0] branch_votes,
+
+    // 1 if this instruction touches the LSU (LDR/STR/emit). Compute-only
+    // instructions skip REQUEST/WAIT (they are pass-through for them).
+    input wire decoded_mem_op,
     
     // Warp State Outputs
     output reg current_warp, // Which warp is currently driving the pipeline?
@@ -128,11 +132,17 @@ module scheduler #(
             FETCH: begin //fetching the next instruction
                 core_state <= DECODE;
             end
-            DECODE: begin//tanslated the instruction
-                core_state <= REQUEST; 
+            DECODE: begin
+                // REQUEST always runs: the registered decoder makes rs/rt addresses
+                // valid only here, and registers.sv latches rs/rt during REQUEST.
+                core_state <= REQUEST;
             end
-            REQUEST: begin 
-                core_state <= WAIT;    
+            REQUEST: begin
+                // For compute-only instructions WAIT is pure pass-through (the LSU
+                // is idle), and rs/rt latched this cycle are valid next cycle, so
+                // jump straight to EXECUTE: 7 cycles -> 6 (~1.17x). Memory ops
+                // (LDR/STR/emit) still need WAIT for the LSU handshake.
+                core_state <= decoded_mem_op ? WAIT : EXECUTE;
             end
             WAIT: begin //checking if the threads are busy, checks if threads are reading, writing to RAM
                 if (warp_emit[current_warp]) begin

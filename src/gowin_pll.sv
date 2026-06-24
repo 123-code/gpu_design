@@ -18,15 +18,17 @@ module gowin_pll (
     assign clkout = clkin;     // DIAGNOSTIC: run straight off the 27 MHz crystal
     assign lock   = 1'b1;
 `elsif SYNTH
-    // rPLL: 27 MHz crystal -> 54 MHz system clock. Verified working on the
+    // rPLL: 27 MHz crystal -> 135 MHz system clock. Verified working on the
     // GW2AR-18C (Tang Nano 20K); plain rPLL is correct here, no PLLVR needed.
-    // (apicula can't pack PLLVR for this device anyway.) The 54 MHz bring-up was
-    // gated on a uart_tx counter-width bug, not the PLL — see uart_tx.sv and
-    // memory/pll-54mhz-bringup.md. -DPLL_BYPASS_DIAG forces 27 MHz (no PLL).
+    // (apicula can't pack PLLVR for this device anyway.) -DPLL_BYPASS_DIAG forces
+    // 27 MHz (no PLL).
     //   CLKOUT = CLKIN * (FBDIV_SEL+1)/(IDIV_SEL+1) = 27 * 3/1 = 81 MHz
     //   VCO    = CLKOUT * ODIV_SEL = 81 * 8 = 648 MHz (within GW2A range)
-    // 81 MHz = 27x3 is the highest rPLL-synthesizable clock at/below the design's
-    // ~81.6 MHz STA Fmax. This is the theoretical max — zero timing margin.
+    // 81 MHz = 27x3 is the proven-good clock on this board. Higher rPLL steps were
+    // tried after the reset fix lifted STA Fmax to ~140: 27x4 = 108 MHz and
+    // 27x5 = 135 MHz BOTH pass static timing but produce garbage / no UART on real
+    // HW (this device's rPLL is fragile above 81 — see memory/pll-54mhz-bringup.md).
+    // Stay at 81; ops/s is raised via the scheduler FSM trim instead, not the clock.
     rPLL #(
         .FCLKIN("27"),
         .IDIV_SEL(0),          // input divider  /1

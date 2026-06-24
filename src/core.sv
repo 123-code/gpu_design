@@ -137,6 +137,9 @@ module core #(
         .decoded_pc_mux(decoded_pc_mux),
         .decoded_immediate(decoded_immediate),
         .branch_votes(branch_votes),
+        // LSU-touching instruction? Lets the scheduler skip REQUEST/WAIT for
+        // compute-only ops (LDR/STR/emit decode these enables).
+        .decoded_mem_op(decoded_mem_read_enable || decoded_mem_write_enable),
         .warp_emit(warp_emit),
         
         .current_warp(current_warp),

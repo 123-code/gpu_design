@@ -19,7 +19,7 @@ echo "=== nextpnr ($W warps / TPB $T / BLOCK_DIM $B) ==="
 nextpnr-himbaechel --json oss_build/cfg/${tag}.json \
    --write oss_build/cfg/${tag}_pnr.json \
    --device "GW2AR-LV18QN88C8/I7" --vopt family=GW2A-18C --vopt cst=src/gpu.cst \
-   --freq 81 2>oss_build/cfg/${tag}.pnr.log
+   --freq "${FREQ:-81}" 2>oss_build/cfg/${tag}.pnr.log
 echo "CFG=$W/$T/$B"
 grep -E "LUT4:|DFF:|BSRAM:|MULT9X9:|Max frequency for clock 'sys_clk'" oss_build/cfg/${tag}.pnr.log
 # Optional 4th arg: pack a flashable bitstream to oss_build/<name>.fs
