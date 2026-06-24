@@ -5,7 +5,7 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 build build-oss flash flash-oss flash-persist asm demo record clean
+.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist asm demo record clean
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
@@ -53,6 +53,12 @@ build-oss:      ## Open-source bitstream (yosys+nextpnr+apicula). GowinSynthesis
 
 flash-oss:      ## Flash the open-source-built bitstream into SRAM
 	openFPGALoader -b tangnano20k oss_build/tiny_gpu_oss.fs
+
+build-oss-max:  ## MAX-throughput bitstream: 2 cores x 1 warp x 12 lanes = 24 ALU lanes (77% LUT, 127 MHz). Set OSS_CAD_SUITE first
+	bash oss_build/build_cfg.sh 1 12 12 tiny_gpu_max24
+
+flash-oss-max:  ## Flash the 24-lane MAX bitstream into SRAM
+	openFPGALoader -b tangnano20k oss_build/tiny_gpu_max24.fs
 
 flash:          ## Load the bitstream into SRAM (volatile, gone on power cycle)
 	./flash.sh

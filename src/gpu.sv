@@ -5,7 +5,14 @@ module gpu #(
     // Launch size (threads per block). Default 8 -> 2 warps per core, with
     // distinct global thread IDs (warp0 = 0..3, warp1 = 4..7). Set to 4 to launch
     // a single warp (no redundant second warp) for 4-thread kernels.
-    parameter BLOCK_DIM = 8
+    parameter BLOCK_DIM = 8,
+    // Warp width = physical ALU lanes per core (the per-cycle SIMD width). This is
+    // the main throughput lever: peak ALU ops ~= NUM_CORES*THREADS_PER_BLOCK*f/7.
+    parameter THREADS_PER_BLOCK = 4,
+    // Warps per core. >1 hides memory latency but DUPLICATES each thread's register
+    // file / LSU / PC (ALUs are shared), so it costs ~2x LUT for the same compute.
+    // Set to 1 to spend that LUT on wider SIMD (more ALUs) instead.
+    parameter WARPS_PER_CORE = 2
 ) (
     input wire clk,//clock input
     input wire reset,//reset signal, clears internal states to 0
@@ -113,7 +120,8 @@ module gpu #(
 
     // COMPUTE CORE 0 (Fully Wired)
     core #(
-        .THREADS_PER_BLOCK(4),
+        .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+        .WARPS_PER_CORE(WARPS_PER_CORE),
         .BLOCK_DIM(BLOCK_DIM)
     ) compute_core_0 (
         .clk(clk),
@@ -149,7 +157,8 @@ module gpu #(
     // through the same UART, after core 0's bytes (see the emit FSM below);
     // until then its LSU just stalls on the handshake.
     core #(
-        .THREADS_PER_BLOCK(4),
+        .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
+        .WARPS_PER_CORE(WARPS_PER_CORE),
         .BLOCK_DIM(BLOCK_DIM)
     ) compute_core_1 (
         .clk(clk),

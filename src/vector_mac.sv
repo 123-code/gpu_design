@@ -20,7 +20,10 @@ module vector_mac (
     reg signed [15:0] p0, p1, p2, p3, p4, p5, p6, p7;
     reg               valid_s1;
 
-    always @(posedge clk or negedge rst_n) begin
+    // Synchronous reset (was async `negedge rst_n`): the async CLEAR pin on these
+    // wide product regs put the high-fanout reset net on the critical path. A
+    // synchronous reset is sampled like ordinary data, freeing that path.
+    always @(posedge clk) begin
         if (!rst_n) begin
             p0 <= 0; p1 <= 0; p2 <= 0; p3 <= 0;
             p4 <= 0; p5 <= 0; p6 <= 0; p7 <= 0;
@@ -48,7 +51,7 @@ module vector_mac (
         {{16{p4[15]}}, p4} + {{16{p5[15]}}, p5} +
         {{16{p6[15]}}, p6} + {{16{p7[15]}}, p7};
 
-    always @(posedge clk or negedge rst_n) begin
+    always @(posedge clk) begin   // synchronous reset (see Stage 1 note)
         if (!rst_n) begin
             result_out <= 32'sd0;
             valid_out <= 1'b0;
