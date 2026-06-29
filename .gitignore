@@ -38,3 +38,6 @@ software/program.hex
 # macOS
 .DS_Store
 .gstack/
+
+# Repo digest dumps (regenerable LLM-context exports)
+digest.txt
