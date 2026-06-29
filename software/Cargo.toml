@@ -2,5 +2,9 @@
 name = "software"
 version = "0.1.0"
 edition = "2024"
+# Two binaries: the assembler (src/main.rs, name "software") is the default so
+# `cargo run -- foo.asm foo.hex` and the Makefile keep working. The J++ compiler
+# is `cargo run --bin jpp`.
+default-run = "software"
 
 [dependencies]

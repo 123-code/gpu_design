@@ -113,8 +113,17 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         // MAC Rd, #n   -> write byte n (0..3) — read the full 32-bit result in 4 ops
         "MAC" => vec![w(0b0111, reg(&toks[1]), 0,
                         toks.get(2).map_or(0, |t| imm(t) & 0b11))],
-        // BRn target (8-bit, into [7:0]); condition = N flag in [11:9]
+        // Branch family: opcode 1000, condition mask N/Z/P in [11:9], 8-bit target
+        // in [7:0]. pc.sv branches when (saved_nzp & mask) != 0. CMP sets
+        // N=(a<b), Z=(a==b), P=(a>b), so after any CMP exactly one flag is set and
+        // BR (mask 111) is an unconditional jump.
         "BRn" => vec![(0b1000 << 12) | (0b100 << 9) | (target(&toks[1]) & 0xff)],
+        "BRz" => vec![(0b1000 << 12) | (0b010 << 9) | (target(&toks[1]) & 0xff)],
+        "BRp" => vec![(0b1000 << 12) | (0b001 << 9) | (target(&toks[1]) & 0xff)],
+        "BRnz" => vec![(0b1000 << 12) | (0b110 << 9) | (target(&toks[1]) & 0xff)],
+        "BRnp" => vec![(0b1000 << 12) | (0b101 << 9) | (target(&toks[1]) & 0xff)],
+        "BRzp" => vec![(0b1000 << 12) | (0b011 << 9) | (target(&toks[1]) & 0xff)],
+        "BR" => vec![(0b1000 << 12) | (0b111 << 9) | (target(&toks[1]) & 0xff)],
         "ADDB" => vec![w(0b1001, 0, 0, imm(&toks[1]))],
         // WBASE: advance the write base. ADDB opcode with instruction[11] set
         // (rd field = 0b100) so the decoder routes it to wbase, no new opcode.

@@ -5,7 +5,16 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean
+.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp
+
+# J++: compile a .jpp source -> asm -> hex, then stream it to the FPGA and read
+# the reply. Usage: make run-jpp JPP=software/program.jpp READ=8
+JPP  ?= software/program.jpp
+READ ?= 8
+run-jpp:        ## Compile + run a J++ program on the FPGA. Usage: make run-jpp JPP=software/foo.jpp
+	cd software && cargo run --quiet --bin jpp -- $(notdir $(JPP)) program.asm
+	cd software && cargo run --quiet -- program.asm program.hex
+	cd software && python3 send_kernel.py program.hex --read $(READ)
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
 	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v

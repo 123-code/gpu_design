@@ -1,0 +1,12 @@
+
+
+
+// J++ demo:suma i mientras i < f
+JoseIgnacioVariable s = 5;
+JoseIgnacioVariable i = 10;
+JoseIgnacioVariable f = 40;
+JoseIgnacioLoop (i < f) {   
+    s = s + i;
+    i = i + 1;
+}
+JoseIgnacioYeet s;        
