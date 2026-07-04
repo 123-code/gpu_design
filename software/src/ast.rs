@@ -43,4 +43,10 @@ pub enum Stmt {
     JoseIgnacioYeet(Expr),
     CrunchPush { pixel: Expr, weight: Option<Expr> }, // push (pixel, weight) pair into the MAC buffer; weight defaults to R0
     CrunchFire{dest: String},
+    // FC-MAC classifier coprocessor + base-pointer streaming
+    FcReset,                                  // fc_reset      -> FRST
+    FcMac { feature: Expr, weight: Expr },    // fc_mac a, b   -> FMAC
+    FcFinalize,                               // fc_finalize   -> FARG
+    FcBest { dest: String },                  // fc_best x     -> FBEST
+    Advance,                                  // advance       -> ADDB #1
 }

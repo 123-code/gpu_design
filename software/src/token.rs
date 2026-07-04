@@ -9,7 +9,13 @@ pub enum Token {
     GrindUntil,  
     Yeet,
     CrunchPush,
-    CrunchFire,        
+    CrunchFire,
+    // FC-MAC classifier coprocessor + base-pointer streaming
+    FcReset,     // fc_reset      -> FRST
+    FcMac,       // fc_mac a, b   -> FMAC
+    FcFinalize,  // fc_finalize   -> FARG
+    FcBest,      // fc_best x     -> FBEST
+    Advance,     // advance       -> ADDB #1
     Ident(String),
     Num(u8), 
     Assign,      

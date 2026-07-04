@@ -44,3 +44,8 @@ digest.txt
 sim_nn
 software/nn.asm
 software/nn.hex
+sim_nn
+sim_mnist_jpp
+software/mnist_fc_jpp.*
+software/nn.asm
+software/nn.hex

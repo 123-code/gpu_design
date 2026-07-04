@@ -80,7 +80,21 @@ impl Codegen {
             Stmt::JoseIgnacioStore { address, value } => self.gen_store(address, value),
             Stmt::JoseIgnacioLoop { condition, body } => self.gen_grind_until(condition, body),
             Stmt::JoseIgnacioYeet(value) => self.gen_yeet(value),
-            Stmt::CrunchPush { pixel, weight } => self.gen_crunch_push(pixel, weight),       
+            Stmt::CrunchPush { pixel, weight } => self.gen_crunch_push(pixel, weight),
+            Stmt::FcReset    => { self.emit("FRST"); Ok(()) }
+            Stmt::FcFinalize => { self.emit("FARG"); Ok(()) }
+            Stmt::Advance    => { self.emit("ADDB #1"); Ok(()) }
+            Stmt::FcMac { feature, weight } => {
+                let rf = self.gen_expr(feature)?;
+                let rw = self.gen_expr(weight)?;
+                self.emit(format!("FMAC R{}, R{}", rf, rw));
+                Ok(())
+            }
+            Stmt::FcBest { dest } => {
+                let rd = self.var_reg(dest)?;
+                self.emit(format!("FBEST R{}", rd));
+                Ok(())
+            }       
             Stmt::CrunchFire { dest } => self.gen_crunch_fire(dest),      
         }
     }

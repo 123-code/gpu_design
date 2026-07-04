@@ -67,6 +67,11 @@ impl Lexer {
                             "JoseIgnacioYeet" | "yeet" => tokens.push(Token::Yeet),
                             "crunch_push" => tokens.push(Token::CrunchPush),
                             "crunch_fire" => tokens.push(Token::CrunchFire),
+                            "fc_reset" => tokens.push(Token::FcReset),
+                            "fc_mac" => tokens.push(Token::FcMac),
+                            "fc_finalize" => tokens.push(Token::FcFinalize),
+                            "fc_best" => tokens.push(Token::FcBest),
+                            "advance" => tokens.push(Token::Advance),
                             _ => tokens.push(Token::Ident(word)),
                         }
                     } else if ch.is_digit(10) {

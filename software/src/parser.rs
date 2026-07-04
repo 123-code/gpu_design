@@ -102,6 +102,11 @@ fn parse_statement(&mut self) -> Result<Stmt, String> {
             Some(Token::GrindUntil) => self.parse_grind_until(),
             Some(Token::CrunchPush) => self.parse_crunch_push(), // NEW
             Some(Token::CrunchFire) => self.parse_crunch_fire(), // NEW
+            Some(Token::FcReset)    => self.parse_nullary(Token::FcReset, Stmt::FcReset),
+            Some(Token::FcFinalize) => self.parse_nullary(Token::FcFinalize, Stmt::FcFinalize),
+            Some(Token::Advance)    => self.parse_nullary(Token::Advance, Stmt::Advance),
+            Some(Token::FcMac)      => self.parse_fc_mac(),
+            Some(Token::FcBest)     => self.parse_fc_best(),
             _ => {
                 self.parse_assignment()
             }
@@ -216,6 +221,34 @@ fn parse_manifest(&mut self) -> Result<Stmt, String> {
     }
 
 
+
+    // A keyword statement with no operands: <kw>;
+    fn parse_nullary(&mut self, kw: Token, stmt: Stmt) -> Result<Stmt, String> {
+        self.consume(kw, "Expected keyword")?;
+        self.consume(Token::Semi, "Expected ';'")?;
+        Ok(stmt)
+    }
+
+    // fc_mac <feature>, <weight>;
+    fn parse_fc_mac(&mut self) -> Result<Stmt, String> {
+        self.consume(Token::FcMac, "Expected 'fc_mac'")?;
+        let feature = self.parse_expression()?;
+        self.consume(Token::Comma, "Expected ',' between fc_mac operands")?;
+        let weight = self.parse_expression()?;
+        self.consume(Token::Semi, "Expected ';' after fc_mac")?;
+        Ok(Stmt::FcMac { feature, weight })
+    }
+
+    // fc_best <variable>;
+    fn parse_fc_best(&mut self) -> Result<Stmt, String> {
+        self.consume(Token::FcBest, "Expected 'fc_best'")?;
+        let dest = match self.advance() {
+            Some(Token::Ident(n)) => n.clone(),
+            _ => return Err("Expected destination variable after fc_best".to_string()),
+        };
+        self.consume(Token::Semi, "Expected ';' after fc_best")?;
+        Ok(Stmt::FcBest { dest })
+    }
 
     // Look at the current token without moving forward
     fn peek(&self) -> Option<&Token> {

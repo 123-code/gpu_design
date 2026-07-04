@@ -1,0 +1,36 @@
+// mnist_fc.jpp — the MNIST fully-connected classifier, in J++.
+//
+// Reads a streamed payload of (feature, weight) pairs from data memory and,
+// for each of the 10 digit classes, accumulates 169 = 13x13 products in the
+// FC-MAC coprocessor, adds the trained bias, and argmaxes. Emits the winning
+// digit. On image 0's real features this predicts 7.
+//
+// (169 is done as nested 13x13 because a MOV immediate is only 6-bit (<=63).)
+// Run at 1 WARP: the FC-MAC accumulator is thread-0 driven.
+manifest digit = 0;
+manifest row = 0;
+manifest col = 0;
+manifest f = 0;
+manifest w = 0;
+
+fc_reset;
+grind_until (digit < 10) {
+    row = 0;
+    grind_until (row < 13) {
+        col = 0;
+        grind_until (col < 13) {
+            f = mem[0];   // feature at the current stream position
+            advance;
+            w = mem[0];   // weight at the next byte
+            advance;
+            fc_mac f, w;  // acc += feature * weight  (32-bit signed)
+            col = col + 1;
+        }
+        row = row + 1;
+    }
+    fc_finalize;          // score = acc + bias[digit]; argmax; next digit
+    digit = digit + 1;
+}
+
+fc_best digit;            // digit = argmax winner
+yeet digit;               // emit the prediction

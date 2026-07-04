@@ -5,7 +5,7 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp
+.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp
 
 # J++: compile a .jpp source -> asm -> hex, then stream it to the FPGA and read
 # the reply. Usage: make run-jpp JPP=software/program.jpp READ=8
@@ -49,6 +49,12 @@ sim-mlp:        ## Parallel FC layer: 9 lanes each compute+write their own neuro
 	cd software && cargo run --quiet -- mlp_parallel.asm mlp_parallel.hex
 	$(IVERILOG) -g2012 -s tb -o sim_mlp test/tb_mlp.sv src/*.sv
 	$(VVP) sim_mlp
+
+sim-mnist-jpp:  ## AI demo: the MNIST classifier written in J++ (mnist_fc.jpp) predicts digit 7
+	cd software && cargo run --quiet --bin jpp -- mnist_fc.jpp mnist_fc_jpp.asm
+	cd software && cargo run --quiet -- mnist_fc_jpp.asm mnist_fc_jpp.hex
+	$(IVERILOG) -g2012 -s tb -o sim_mnist_jpp test/tb_mnist_jpp.sv src/*.sv
+	$(VVP) sim_mnist_jpp
 
 sim-nn:         ## AI demo: a neuron written in J++ (nn.jpp) runs on the MAC, computes 64
 	cd software && cargo run --quiet --bin jpp -- nn.jpp nn.asm

@@ -37,6 +37,8 @@ def main():
     args = [a for a in sys.argv[1:]]
     read_n = 16
     port = PORT
+    data_hex = None   # optional: read the data payload from a hex-byte file
+    pad = 0           # optional: extra zero bytes to absorb the DMA final-byte drop
     # pull options
     rest = []
     i = 0
@@ -45,15 +47,24 @@ def main():
             read_n = int(args[i + 1]); i += 2
         elif args[i] == "--port":
             port = args[i + 1]; i += 2
+        elif args[i] == "--data-hex":
+            data_hex = args[i + 1]; i += 2
+        elif args[i] == "--pad":
+            pad = int(args[i + 1]); i += 2
         else:
             rest.append(args[i]); i += 1
 
     if not rest:
-        print("usage: send_kernel.py <kernel.hex> [d0,d1,...] [--read N] [--port DEV]")
+        print("usage: send_kernel.py <kernel.hex> [d0,d1,...] [--data-hex F] [--pad N] [--read N] [--port DEV]")
         sys.exit(2)
 
     kernel = rest[0]
-    data = bytes(int(x, 0) & 0xFF for x in rest[1].split(",")) if len(rest) > 1 and rest[1] else b""
+    if data_hex:
+        # one hex byte per whitespace-separated token (same format $readmemh eats)
+        toks = open(data_hex).read().split()
+        data = bytes(int(t, 16) & 0xFF for t in toks) + bytes(pad)
+    else:
+        data = bytes(int(x, 0) & 0xFF for x in rest[1].split(",")) if len(rest) > 1 and rest[1] else b""
 
     prog = load_hex(kernel)
     instr_size = len(prog)

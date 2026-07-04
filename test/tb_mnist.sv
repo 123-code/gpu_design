@@ -38,19 +38,8 @@ module tb_mnist;
     always @(posedge clk)
         if (emit_valid && !got) begin predicted <= emit_data; got <= 1'b1; end
 
-    // Probe: count FMACs between FARGs, print PC + acc at each FARG.
-    integer fmac_cnt = 0;
-    always @(posedge clk)
-        if (uut.compute_core_0.decoded_fc_mac && uut.compute_core_0.core_state == 3'b110)
-            fmac_cnt = fmac_cnt + 1;
-    always @(posedge clk)
-        if (uut.compute_core_0.decoded_fc_arg && uut.compute_core_0.core_state == 3'b110) begin
-            $display("FARG PC=%0d digit=%0d acc=%0d fmac_since_last=%0d",
-                     uut.compute_core_0.instruction_address,
-                     uut.compute_core_0.u_fc.digit,
-                     $signed(uut.compute_core_0.u_fc.acc), fmac_cnt);
-            fmac_cnt = 0;
-        end
+    // ponytail: FARG probe removed — referenced signal names that changed in the
+    // dual-core refactor; it was diagnostic only, the PASS/FAIL check below stands.
 
     integer cyc = 0;
     initial begin
