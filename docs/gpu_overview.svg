@@ -23,7 +23,7 @@
   <!-- system row -->
   <rect x="40" y="84" width="150" height="46" class="blk sys"/>
   <text x="115" y="105" text-anchor="middle" font-size="13" class="lbl">Host PC</text>
-  <text x="115" y="121" text-anchor="middle" class="sub">draws a digit</text>
+  <text x="115" y="121" text-anchor="middle" class="sub">sends a payload</text>
   <rect x="250" y="84" width="130" height="46" class="blk sys"/>
   <text x="315" y="105" text-anchor="middle" font-size="13" class="lbl">uart_rx</text>
   <text x="315" y="121" text-anchor="middle" class="sub">115200 baud</text>
@@ -36,7 +36,7 @@
   <path class="wire" d="M190,107 L248,107"/>
   <path class="wire" d="M380,107 L438,107"/>
   <path class="wire" d="M600,107 L658,107"/>
-  <text x="220" y="78" text-anchor="middle" class="sub">2×784 B image</text>
+  <text x="220" y="78" text-anchor="middle" class="sub">program + data</text>
   <path class="wire" d="M770,130 L770,170 L770,208"/>
   <text x="900" y="160" text-anchor="middle" class="sub">mem_rdata ↔ mem_raddr / writes</text>
 
@@ -147,7 +147,7 @@
   <text x="785" y="690" text-anchor="middle" font-size="13" class="lbl">uart_tx</text>
   <rect x="900" y="664" width="220" height="46" class="blk sys"/>
   <text x="1010" y="684" text-anchor="middle" font-size="13" class="lbl">Host PC</text>
-  <text x="1010" y="701" text-anchor="middle" class="sub">predicted digit + cycle count</text>
+  <text x="1010" y="701" text-anchor="middle" class="sub">result bytes</text>
   <path class="wire" d="M420,630 L420,650 L370,650 L370,662"/>
   <path class="wire" d="M560,630 L560,650 L580,650 L580,662"/>
   <path class="wire" d="M440,687 L488,687"/>
