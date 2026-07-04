@@ -108,7 +108,9 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "BDIM" => vec![w(0b0010, reg(&toks[1]), 3, 0)],
         "CMP" => vec![w(0b0011, 0, reg(&toks[1]), reg(&toks[2]))],
         "LDR" => vec![w(0b0100, reg(&toks[1]), reg(&toks[2]), 0)],
-        "MACL" => vec![w(0b0110, 0, reg(&toks[1]), 0)],
+        // MACL Rpix           -> push (pixel=Rpix, weight=R0)
+        // MACL Rpix, Rweight   -> push (pixel=Rpix, weight=Rweight)
+        "MACL" => vec![w(0b0110, 0, reg(&toks[1]), toks.get(2).map_or(0, |t| reg(t) & 7))],
         // MAC Rd       -> write byte 0 (LSB) of the 32-bit MAC result into Rd
         // MAC Rd, #n   -> write byte n (0..3) — read the full 32-bit result in 4 ops
         "MAC" => vec![w(0b0111, reg(&toks[1]), 0,

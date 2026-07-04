@@ -40,7 +40,7 @@ pub enum Stmt {
     JoseIgnacioAssign { name: String, value: Expr },   // overwrite an existing register
     JoseIgnacioStore { address: Expr, value: Expr }, // mem[address] = value;
     JoseIgnacioLoop { condition: Expr, body: Vec<Stmt> },
-    JoseIgnacioYeet(Expr), 
-    CrunchPush(Expr),   
-    CrunchFire{dest: String},                        
+    JoseIgnacioYeet(Expr),
+    CrunchPush { pixel: Expr, weight: Option<Expr> }, // push (pixel, weight) pair into the MAC buffer; weight defaults to R0
+    CrunchFire{dest: String},
 }

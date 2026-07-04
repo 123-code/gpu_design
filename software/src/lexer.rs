@@ -37,6 +37,7 @@ impl Lexer {
                 '}' => { tokens.push(Token::CloseBrace); self.position += 1; }
                 '[' => { tokens.push(Token::OpenBracket); self.position += 1; }
                 ']' => { tokens.push(Token::CloseBracket); self.position += 1; }
+                ',' => { tokens.push(Token::Comma); self.position += 1; }
                 '+' => { tokens.push(Token::Plus); self.position += 1; }
                 '-' => { tokens.push(Token::Minus); self.position += 1; }
                 '<' => { tokens.push(Token::LessThan); self.position += 1; }
@@ -61,9 +62,11 @@ impl Lexer {
                     if ch.is_alphabetic() || ch == '_' {
                         let word = self.read_identifier();
                         match word.as_str() {
-                            "JoseIgnacioVariable" => tokens.push(Token::Manifest),
-                            "JoseIgnacioLoop" => tokens.push(Token::GrindUntil),
-                            "JoseIgnacioYeet" => tokens.push(Token::Yeet),
+                            "manifest" => tokens.push(Token::Manifest),
+                            "grind_until" => tokens.push(Token::GrindUntil),
+                            "JoseIgnacioYeet" | "yeet" => tokens.push(Token::Yeet),
+                            "crunch_push" => tokens.push(Token::CrunchPush),
+                            "crunch_fire" => tokens.push(Token::CrunchFire),
                             _ => tokens.push(Token::Ident(word)),
                         }
                     } else if ch.is_digit(10) {

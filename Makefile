@@ -50,6 +50,12 @@ sim-mlp:        ## Parallel FC layer: 9 lanes each compute+write their own neuro
 	$(IVERILOG) -g2012 -s tb -o sim_mlp test/tb_mlp.sv src/*.sv
 	$(VVP) sim_mlp
 
+sim-nn:         ## AI demo: a neuron written in J++ (nn.jpp) runs on the MAC, computes 64
+	cd software && cargo run --quiet --bin jpp -- nn.jpp nn.asm
+	cd software && cargo run --quiet -- nn.asm nn.hex
+	$(IVERILOG) -g2012 -s tb -o sim_nn test/tb_nn.sv src/*.sv
+	$(VVP) sim_nn
+
 bench:          ## Measure real ALU ops/s on the board (needs the max18 bitstream flashed)
 	cd software && cargo run --quiet -- bench_ops.asm bench_ops.hex
 	python3 software/bench_host.py

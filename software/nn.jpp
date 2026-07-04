@@ -1,0 +1,20 @@
+// nn.jpp — a single neuron (8-tap dot product) on the GPU's MAC accelerator.
+//
+// The 8 input pixels come from data memory (streamed in by the host).
+// The 8 weights are the "trained model", baked into the kernel below.
+// out = sum(pixel[i] * weight[i]), computed in one shot by vector_mac.
+//
+// With pixels = 1,2,3,4,5,6,7,8 and weights = 1,2,3,4,3,2,1,0  ->  out = 64.
+manifest out = 0;
+
+crunch_push mem[0], 1;
+crunch_push mem[1], 2;
+crunch_push mem[2], 3;
+crunch_push mem[3], 4;
+crunch_push mem[4], 3;
+crunch_push mem[5], 2;
+crunch_push mem[6], 1;
+crunch_push mem[7], 0;
+
+crunch_fire out;   // fire the 8-lane MAC, quantized result -> out
+yeet out;          // send the neuron's output back over UART

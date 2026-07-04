@@ -80,7 +80,7 @@ impl Codegen {
             Stmt::JoseIgnacioStore { address, value } => self.gen_store(address, value),
             Stmt::JoseIgnacioLoop { condition, body } => self.gen_grind_until(condition, body),
             Stmt::JoseIgnacioYeet(value) => self.gen_yeet(value),
-            Stmt::CrunchPush(value) => self.gen_crunch_push(value),       
+            Stmt::CrunchPush { pixel, weight } => self.gen_crunch_push(pixel, weight),       
             Stmt::CrunchFire { dest } => self.gen_crunch_fire(dest),      
         }
     }
@@ -212,16 +212,13 @@ impl Codegen {
                 Ok(d)
             }
             Expr::MemoryAccess(index_expr) => {
-    // Line 1: Calculate the inside of the brackets (the index)
+    // Compute the index. If it landed in a scratch register, the index is dead
+    // after the load, so load in place and reuse it (1 scratch instead of 2).
+    // If it's a live variable register, load into a fresh scratch so we don't
+    // clobber the variable.
     let r_index = self.gen_expr(index_expr)?;
-    
-    // Line 2: Ask the compiler for a fresh, empty scratch register (like R6 or R7)
-    let r_dest = self.scratch()?;
-    
-    // Line 3: Emit the physical hardware instruction text
+    let r_dest = if r_index >= SCRATCH_BASE { r_index } else { self.scratch()? };
     self.emit(format!("LDR R{}, [R{}]", r_dest, r_index));
-    
-    // Hand back the register that now holds the data we pulled from RAM
     Ok(r_dest)
 }
         }
@@ -229,9 +226,15 @@ impl Codegen {
 
  
 // crunch_push <expr>; -> evaluates expression to a scratch register, emits MACL
-    fn gen_crunch_push(&mut self, value: &Expr) -> Result<(), String> {
-        let r_val = self.gen_expr(value)?;
-        self.emit(format!("MACL R{}", r_val));
+    fn gen_crunch_push(&mut self, pixel: &Expr, weight: &Option<Expr>) -> Result<(), String> {
+        let r_pix = self.gen_expr(pixel)?;
+        match weight {
+            Some(w) => {
+                let r_w = self.gen_expr(w)?;
+                self.emit(format!("MACL R{}, R{}", r_pix, r_w));
+            }
+            None => self.emit(format!("MACL R{}", r_pix)), // weight defaults to R0
+        }
         Ok(())
     }
 

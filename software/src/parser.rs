@@ -187,11 +187,19 @@ fn parse_manifest(&mut self) -> Result<Stmt, String> {
     }
 
     // Parses: crunch_push <expr>;
+    // crunch_push <pixel>;            weight defaults to R0
+    // crunch_push <pixel>, <weight>;  explicit (pixel, weight) pair
     fn parse_crunch_push(&mut self) -> Result<Stmt, String> {
         self.consume(Token::CrunchPush, "Expected 'crunch_push'")?;
-        let value = self.parse_expression()?;    
+        let pixel = self.parse_expression()?;
+        let weight = if self.peek() == Some(&Token::Comma) {
+            self.advance(); // consume ','
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
         self.consume(Token::Semi, "Expected ';' after crunch_push")?;
-        Ok(Stmt::CrunchPush(value))
+        Ok(Stmt::CrunchPush { pixel, weight })
     }
 
     // Parses: crunch_fire <variable>;

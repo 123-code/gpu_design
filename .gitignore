@@ -41,3 +41,6 @@ software/program.hex
 
 # Repo digest dumps (regenerable LLM-context exports)
 digest.txt
+sim_nn
+software/nn.asm
+software/nn.hex
