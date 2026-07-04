@@ -1,6 +1,6 @@
 // software/src/parser.rs
 use crate::token::Token;
-use crate::ast::{Stmt, Expr, Op};
+use crate::ast::{Stmt, Expr, Op, IdentityReg};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -61,25 +61,48 @@ impl Parser {
         Ok(left)
     }
 
-    // Atoms: a literal number or a variable name
+    
     fn parse_operand(&mut self) -> Result<Expr, String> {
         match self.advance() {
             Some(Token::Num(val)) => Ok(Expr::Number(*val)),
-            Some(Token::Ident(name)) => Ok(Expr::Variable(name.clone())),
-            _ => Err("Expected a number or variable in expression".to_string()),
+            Some(Token::Ident(name)) => {
+                let name = name.clone();
+                // SIMT identity reads: bare keywords that evaluate to a register.
+                match name.as_str() {
+                    "tid" => return Ok(Expr::ThreadId(IdentityReg::Tid)),
+                    "bid" => return Ok(Expr::ThreadId(IdentityReg::Bid)),
+                    "bdim" => return Ok(Expr::ThreadId(IdentityReg::Bdim)),
+                    _ => {}
+                }
+                if name == "mem" && self.peek() == Some(&Token::OpenBracket) {
+                    self.consume(Token::OpenBracket, "Expected '[' after mem")?;
+                    
+                    let index_expr = self.parse_expression()?;
+                    
+                    self.consume(Token::CloseBracket, "Expected ']' after memory index")?;
+                    
+                   
+                    return Ok(Expr::MemoryAccess(Box::new(index_expr)));
+                }
+                
+                
+                Ok(Expr::Variable(name))
+            }
+            _ => Err("Expected a number, variable, or mem[] in expression".to_string()),
         }
     }
 
 
 
     
-   fn parse_statement(&mut self) -> Result<Stmt, String> {
+fn parse_statement(&mut self) -> Result<Stmt, String> {
         match self.peek() {
             Some(Token::Manifest) => self.parse_manifest(),
             Some(Token::Yeet) => self.parse_yeet(),
             Some(Token::GrindUntil) => self.parse_grind_until(),
+            Some(Token::CrunchPush) => self.parse_crunch_push(), // NEW
+            Some(Token::CrunchFire) => self.parse_crunch_fire(), // NEW
             _ => {
-                // If it's just a variable name, it must be an assignment like: s = s + 1;
                 self.parse_assignment()
             }
         }
@@ -92,7 +115,26 @@ impl Parser {
         Ok(Stmt::JoseIgnacioYeet(value))
     }
 
+
+
+
+    
     fn parse_assignment(&mut self) -> Result<Stmt, String> {
+        
+        if self.peek() == Some(&Token::Ident("mem".to_string())) {
+            self.advance(); 
+            self.consume(Token::OpenBracket, "Expected '[' after mem")?;
+            let address = self.parse_expression()?;
+            self.consume(Token::CloseBracket, "Expected ']'")?;
+            
+            self.consume(Token::Assign, "Expected '='")?;
+            let value = self.parse_expression()?;
+            self.consume(Token::Semi, "Expected ';'")?;
+            
+            return Ok(Stmt::JoseIgnacioStore { address, value });
+        }
+
+        
         let name = match self.advance() {
             Some(Token::Ident(n)) => n.clone(),
             _ => return Err("Expected variable name for assignment".to_string()),
@@ -100,6 +142,7 @@ impl Parser {
         self.consume(Token::Assign, "Expected '=' in assignment")?;
         let value = self.parse_expression()?;
         self.consume(Token::Semi, "Expected ';' after assignment")?;
+        
         Ok(Stmt::JoseIgnacioAssign { name, value })
     }
 
@@ -141,6 +184,27 @@ fn parse_manifest(&mut self) -> Result<Stmt, String> {
 
         self.consume(Token::Semi, "Expected ';'")?;
         Ok(Stmt::JoseIgnacioVariable { name, value })
+    }
+
+    // Parses: crunch_push <expr>;
+    fn parse_crunch_push(&mut self) -> Result<Stmt, String> {
+        self.consume(Token::CrunchPush, "Expected 'crunch_push'")?;
+        let value = self.parse_expression()?;    
+        self.consume(Token::Semi, "Expected ';' after crunch_push")?;
+        Ok(Stmt::CrunchPush(value))
+    }
+
+    // Parses: crunch_fire <variable>;
+    fn parse_crunch_fire(&mut self) -> Result<Stmt, String> {
+        self.consume(Token::CrunchFire, "Expected 'crunch_fire'")?;
+        
+        let dest = match self.advance() {
+            Some(Token::Ident(n)) => n.clone(),
+            _ => return Err("Expected destination variable name after crunch_fire".to_string()),
+        };
+        
+        self.consume(Token::Semi, "Expected ';' after crunch_fire")?;
+        Ok(Stmt::CrunchFire { dest })
     }
 
 

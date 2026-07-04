@@ -1,0 +1,9 @@
+// tid_demo.jpp — J++ can now read the per-lane SIMT identity registers.
+//   tid  = threadIdx (this lane's index)
+//   bid  = blockIdx  (this core's block)
+//   bdim = blockDim  (threads per block)
+// Each lane computes a value from its own thread id; the hardware runs all
+// lanes in lockstep with per-lane data (tb_warps proves lanes see 0,1,2,3).
+manifest gid = bid;
+gid = gid + tid;      // global-ish id = blockIdx + threadIdx
+yeet gid;

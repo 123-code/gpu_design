@@ -14,6 +14,20 @@ A small SIMT GPU: two compute cores, each with its own warp scheduler, per-lane 
 - **Host-driven accelerator harness:** a UART receiver feeds a DMA engine that streams program and data into on-chip memory, launches a run, and streams the result back — all with no CPU on the board; the computer acts as the host.
 - **Its own programming language:** J++, a small C-like language with a compiler written in Rust, so you can write high-level kernels and stream them into the FPGA without hand-assembling 16-bit opcodes.
 
+## Demo
+
+Write a kernel in J++, and one command compiles it, streams it to the FPGA over UART, runs it on both cores, and prints what the kernel emits back:
+
+```bash
+make run-jpp JPP=software/demo.jpp READ=2
+```
+
+`software/demo.jpp` sums `0..7` on the GPU and `yeet`s the result — each core replies with `28` (`0x1C`).
+
+![J++ running on the FPGA](docs/demo.gif)
+
+> Regenerate the GIF (board plugged in, [VHS](https://github.com/charmbracelet/vhs) installed): `vhs demo/demo.tape`
+
 ## Architecture
 
 [![Full architecture](docs/gpu_overview.svg)](docs/gpu_overview.svg)
@@ -116,6 +130,7 @@ If you'd rather not hand-assemble, **J++** is a C-like language with its own com
 - `manifest x = …` — declare a variable (register-allocated)
 - `grind_until (cond) { … }` — loop, lowered to `CMP` + branch
 - `yeet expr` — emit a result byte (the memory-mapped UART store)
+- `tid` / `bid` / `bdim` — read this lane's SIMT identity (threadIdx / blockIdx / blockDim), so kernels can do per-lane work
 - `crunch_push` / `crunch_fire` — drive the MAC coprocessor from source
 
 ```bash

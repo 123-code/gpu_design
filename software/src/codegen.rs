@@ -7,7 +7,7 @@
 // N/Z/P flags via CMP and only appear in loop conditions; arithmetic (+ - *)
 // appears in value expressions.
 
-use crate::ast::{Stmt, Expr, Op};
+use crate::ast::{Stmt, Expr, Op, IdentityReg};
 use std::collections::HashMap;
 
 const MAX_VAR_REG: u8 = 5; // R0..R5 for variables
@@ -70,19 +70,22 @@ impl Codegen {
             .ok_or_else(|| format!("use of undeclared variable '{}'", name))
     }
 
-    // --- statements ---
+
 
     fn gen_statement(&mut self, stmt: &Stmt) -> Result<(), String> {
-        self.next_scratch = SCRATCH_BASE; // each statement starts with fresh scratch
+        self.next_scratch = SCRATCH_BASE; 
         match stmt {
             Stmt::JoseIgnacioVariable { name, value } => self.gen_manifest(name, value),
             Stmt::JoseIgnacioAssign { name, value } => self.gen_assign(name, value),
+            Stmt::JoseIgnacioStore { address, value } => self.gen_store(address, value),
             Stmt::JoseIgnacioLoop { condition, body } => self.gen_grind_until(condition, body),
             Stmt::JoseIgnacioYeet(value) => self.gen_yeet(value),
+            Stmt::CrunchPush(value) => self.gen_crunch_push(value),       
+            Stmt::CrunchFire { dest } => self.gen_crunch_fire(dest),      
         }
     }
 
-    // manifest s = <expr>;  -> reserve a register, then assign into it.
+   
     fn gen_manifest(&mut self, name: &str, value: &Expr) -> Result<(), String> {
         if self.next_var_reg > MAX_VAR_REG {
             return Err("out of variable registers (only R0..R5 available)".into());
@@ -178,6 +181,16 @@ impl Codegen {
                 Ok(r)
             }
             Expr::Variable(name) => self.var_reg(name),
+            Expr::ThreadId(kind) => {
+                let r = self.scratch()?;
+                let mnem = match kind {
+                    IdentityReg::Tid => "TID",
+                    IdentityReg::Bid => "BID",
+                    IdentityReg::Bdim => "BDIM",
+                };
+                self.emit(format!("{} R{}", mnem, r));
+                Ok(r)
+            }
             Expr::BinaryOp { left, op, right } => {
                 let lr = self.gen_expr(left)?;
                 // ADD with an immediate right operand -> ADDI, no scratch for the constant.
@@ -198,7 +211,43 @@ impl Codegen {
                 self.emit(format!("{} R{}, R{}, R{}", mnem, d, lr, rr));
                 Ok(d)
             }
-            Expr::MemoryAccess(_) => Err("mem[] not supported yet".into()),
+            Expr::MemoryAccess(index_expr) => {
+    // Line 1: Calculate the inside of the brackets (the index)
+    let r_index = self.gen_expr(index_expr)?;
+    
+    // Line 2: Ask the compiler for a fresh, empty scratch register (like R6 or R7)
+    let r_dest = self.scratch()?;
+    
+    // Line 3: Emit the physical hardware instruction text
+    self.emit(format!("LDR R{}, [R{}]", r_dest, r_index));
+    
+    // Hand back the register that now holds the data we pulled from RAM
+    Ok(r_dest)
+}
         }
+    }
+
+ 
+// crunch_push <expr>; -> evaluates expression to a scratch register, emits MACL
+    fn gen_crunch_push(&mut self, value: &Expr) -> Result<(), String> {
+        let r_val = self.gen_expr(value)?;
+        self.emit(format!("MACL R{}", r_val));
+        Ok(())
+    }
+
+    // crunch_fire <variable>; -> emits MAC to save the result into the variable's register
+    fn gen_crunch_fire(&mut self, dest: &str) -> Result<(), String> {
+        let r_dest = self.var_reg(dest)?;
+        self.emit(format!("MAC R{}", r_dest));
+        Ok(())
+    }
+  
+
+    fn gen_store(&mut self, address: &Expr, value: &Expr) -> Result<(), String> {
+        let r_addr = self.gen_expr(address)?;
+        let r_data = self.gen_expr(value)?;
+        self.emit(format!("STR R{}, [R{}]", r_data, r_addr));
+        
+        Ok(())
     }
 }
