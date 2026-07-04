@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# jpp — write J++, run it on the FPGA. No hex, no python commands.
+#
+#   ./jpp                 REPL: type code, then  /run  to run it on the board
+#   ./jpp program.jpp     compile + run a file
+#
+# REPL commands:  /run  /show  /clear  /quit
+# Env: READ=N  (# reply bytes to read, default 2 = one per core)
+set -euo pipefail
+cd "$(dirname "$0")"
+SW=software
+READ=${READ:-2}
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+
+run_program() {   # $1 = J++ source file
+  if ! ( cd "$SW" && cargo run --quiet --bin jpp -- "$1" "$TMP/p.asm" >/dev/null 2>"$TMP/err" \
+                  && cargo run --quiet -- "$TMP/p.asm" "$TMP/p.hex" >/dev/null 2>>"$TMP/err" ); then
+    echo "compile error:"; cat "$TMP/err"; return 1
+  fi
+  local out
+  out=$( cd "$SW" && python3 send_kernel.py "$TMP/p.hex" --read "$READ" 2>&1 )
+  if echo "$out" | grep -q decimal; then
+    echo "$out" | sed -n 's/.*decimal *: */→ /p'   # just the reply, e.g. "→  42  42"
+  else
+    echo "$out"                                     # board error / timeout: show it
+  fi
+}
+
+# File mode
+if [ $# -ge 1 ]; then run_program "$1"; exit $?; fi
+
+# REPL mode
+echo "J++ REPL — type code, /run to run on the FPGA, /show, /clear, /quit"
+: > "$TMP/buf.jpp"
+while IFS= read -rep "jpp> " line; do
+  case "$line" in
+    /run)        run_program "$TMP/buf.jpp" || true ;;
+    /show)       cat "$TMP/buf.jpp" ;;
+    /clear)      : > "$TMP/buf.jpp"; echo "(cleared)" ;;
+    /quit|/exit) break ;;
+    "")          ;;
+    /*)          echo "commands: /run /show /clear /quit" ;;
+    *)           printf '%s\n' "$line" >> "$TMP/buf.jpp" ;;
+  esac
+done
