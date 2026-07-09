@@ -237,6 +237,3 @@ oss_build/  open-source synthesis flow (run_oss.sh, build_cfg.sh)
 *.sh, *.tcl headless Gowin build/flash on macOS
 ```
 
-## Credits
-
-Forked from [tiny-gpu](https://github.com/adam-maj/tiny-gpu) by Adam Majmudar — a simulation-only teaching GPU. This fork takes that core onto real silicon and grows the ISA, toolchain, and SIMT feature set from there.
