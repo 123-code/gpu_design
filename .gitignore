@@ -49,3 +49,9 @@ sim_mnist_jpp
 software/mnist_fc_jpp.*
 software/nn.asm
 software/nn.hex
+
+# Python caches + stray sim/artifact
+__pycache__/
+*.pyc
+sim_demo
+core.gds
