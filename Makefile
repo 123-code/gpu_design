@@ -2,10 +2,31 @@
 # Common tasks. The FPGA build/flash steps shell out to the helper scripts,
 # which set up the macOS library paths the Gowin CLI tools need.
 
-IVERILOG ?= iverilog
-VVP      ?= vvp
+IVERILOG  ?= iverilog
+VVP       ?= vvp
+VERILATOR ?= verilator
 
-.PHONY: sim sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp
+.PHONY: drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp
+
+# Run any testbench under Verilator (the tool the job posting names) instead of
+# iverilog. Verilator is a stricter linter and much faster; --timing lets it
+# handle the #-delay testbenches. Usage: make sim-vl TB=test/tb_mac32.sv
+TB ?= test/tb_mac32.sv
+VL_WARN = -Wno-fatal -Wno-WIDTH -Wno-UNOPTFLAT -Wno-CASEINCOMPLETE -Wno-BLKANDNBLK -Wno-PINMISSING
+sim-vl:         ## Run a testbench under Verilator. Usage: make sim-vl TB=test/tb_mac32.sv
+	$(VERILATOR) --binary --timing $(VL_WARN) -j 0 --top-module tb --Mdir obj_vl $(TB) src/*.sv -o sim_vl
+	./obj_vl/sim_vl
+
+# Verilog interview drills: type the module in drills/NN_name.sv, the
+# testbench grades you. See drills/README.md.
+D ?= 01_counter
+drill:          ## Run a drill against its checker. Usage: make drill D=01_counter
+	$(IVERILOG) -g2012 -s tb -o drills/sim_$(D) drills/$(D).sv drills/tb/tb_$(D).sv
+	$(VVP) drills/sim_$(D)
+
+drill-peek:     ## Run the reference solution for a drill (verify the checker, or peek)
+	$(IVERILOG) -g2012 -s tb -o drills/sim_$(D) drills/solutions/$(D).sv drills/tb/tb_$(D).sv
+	$(VVP) drills/sim_$(D)
 
 # J++: compile a .jpp source -> asm -> hex, then stream it to the FPGA and read
 # the reply. Usage: make run-jpp JPP=software/program.jpp READ=8
@@ -17,7 +38,7 @@ run-jpp:        ## Compile + run a J++ program on the FPGA. Usage: make run-jpp 
 	cd software && python3 send_kernel.py program.hex --read $(READ)
 
 sim:            ## Build + run the simulation (self-checks that 5*3 = 15)
-	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv src/*.v
+	$(IVERILOG) -g2012 -s tb -o gpu_sim test/tb.sv src/*.sv
 	$(VVP) gpu_sim
 
 sim-loadrun:    ## General load->run->readback: stream a kernel+data over UART, run, check reply
