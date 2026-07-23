@@ -28,7 +28,7 @@ module top #(
 `ifdef PLL_BYPASS_DIAG
     parameter CLK_FREQ      = 27000000,
 `else
-    parameter CLK_FREQ      = 81000000,    // rPLL 27x3 (see gowin_pll.sv)
+    parameter CLK_FREQ      = 54000000,    // rPLL 27x2 (see gowin_pll.sv); must match FBDIV
 `endif
     parameter BAUD_RATE     = 115200, //baud rate
     parameter BLOCK_DIM     = 8,         // launch size: threads per block (warps x TPB lanes)

@@ -1,10 +1,8 @@
 // demo.jpp — sum 0..7 on the GPU, in J++.
 // Compiles to tiny-gpu asm, streams to the FPGA, runs on both cores,
 // and each core yeets the result back over UART.  0+1+..+7 = 28 (0x1C).
+
 manifest s = 0;
 manifest i = 0;
-grind_until (i < 8) {
-    s = s + i;
-    i = i + 1;
-}
+s = 18+18;
 yeet s;

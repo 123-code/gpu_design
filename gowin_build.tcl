@@ -14,6 +14,7 @@ add_file src/registers.sv
 add_file src/pc.sv
 add_file src/lsu.sv
 add_file src/lsu_arbiter.sv
+add_file src/lsu_write_arbiter.sv
 add_file src/scheduler.sv
 add_file src/program_memory.sv
 add_file src/vector_mac.sv
@@ -26,6 +27,7 @@ add_file src/dma_controller.sv
 add_file src/uart_rx.sv
 add_file src/uart_tx.sv
 add_file src/data_pipeline.sv
+add_file src/gowin_pll.sv
 add_file src/top.sv
 
 # ---- Physical + timing constraints ----

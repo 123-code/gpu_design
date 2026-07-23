@@ -32,8 +32,11 @@ module gowin_pll (
     rPLL #(
         .FCLKIN("27"),
         .IDIV_SEL(0),          // input divider  /1
-        .FBDIV_SEL(2),         // feedback divider x3  -> 81 MHz out
-        .ODIV_SEL(8),          // VCO = 81*8 = 648 MHz
+        // ponytail: 54 MHz (27x2), margin-safe. 81 MHz (x3) is fragile on this
+        // rPLL and locks only intermittently -> frozen design / no UART. Bump
+        // back to FBDIV_SEL(2) + CLK_FREQ 81e6 if a proven-stable board wants it.
+        .FBDIV_SEL(1),         // feedback divider x2  -> 54 MHz out
+        .ODIV_SEL(16),         // VCO = 54*16 = 864 MHz (apicula requires 500-1250)
         .DYN_IDIV_SEL("false"),
         .DYN_FBDIV_SEL("false"),
         .DYN_ODIV_SEL("false"),

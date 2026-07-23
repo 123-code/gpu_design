@@ -20,6 +20,18 @@ from mnist_ref import run_pipeline, load_model   # bit-exact stage model
 IOSS = 0x80045402  # macOS TIOCSIOSPEED-equivalent: set arbitrary baud
 WEIGHTS, BIASES = load_model()  # baked CNN weights/biases, loaded once
 
+def load_hex(path):
+    words = []
+    for line in open(path):
+        s = line.split("//")[0].split(";")[0].strip()
+        if s:
+            words.append(int(s, 16) & 0xFFFF)
+    return words
+
+# The GPU program is NOT baked into the bitstream — it must be streamed in the
+# same UART frame as the image (see src/dma_controller.sv). Load it once.
+PROG = load_hex(os.path.join(SOFTWARE, "mnist_full.hex"))  # 170 words
+
 def find_port():
     if os.environ.get("PORT"):
         return os.environ["PORT"]
@@ -46,11 +58,20 @@ def classify(pixels):
         while time.time() < end:
             r,_,_ = select.select([fd], [], [], 0.1)
             if r: os.read(fd, 64); end = time.time() + 0.15
-        # stream the image twice: core 0's copy, then core 1's copy
-        img = bytes(max(0, min(255, int(p))) for p in pixels)
-        data = img + img
-        for i in range(0, len(data), 64):
-            os.write(fd, data[i:i+64]); time.sleep(0.002)
+        # build the frame the DMA expects: [instr_size LE][data_size LE]
+        # [program: lo,hi per word][image bytes + 1 pad]. The data is broadcast
+        # to both cores' memories, so one image drives both. +1 pad byte because
+        # the DMA drops the final data byte.
+        img = bytes(max(0, min(255, int(p))) for p in pixels[:784])
+        data = img + b"\x00"
+        frame = bytearray()
+        frame += struct.pack("<H", len(PROG))   # instr_size in 16-bit words
+        frame += struct.pack("<H", len(data))   # data_size in bytes
+        for w in PROG:
+            frame += bytes([w & 0xFF, (w >> 8) & 0xFF])
+        frame += data
+        for i in range(0, len(frame), 64):
+            os.write(fd, frame[i:i+64]); time.sleep(0.002)
         # read the 8-byte reply (GPU runs ~18 ms then emits)
         buf = b""; end = time.time() + 5
         while time.time() < end and len(buf) < 8:
