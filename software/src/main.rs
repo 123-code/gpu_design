@@ -64,6 +64,7 @@ fn split_label(line: &str) -> (Option<String>, Vec<String>) {
 fn word_count(mnemonic: &str) -> u16 {
     match mnemonic {
         "MAX" => 4, // pseudo-op: ADDI / CMP / BRn / ADDI
+        "LDI" => 3, // pseudo-op: MOV top4 / LUI mid6 / LUI low6
         _ => 1,
     }
 }
@@ -106,6 +107,18 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "TID" => vec![w(0b0010, reg(&toks[1]), 1, 0)],
         "BID" => vec![w(0b0010, reg(&toks[1]), 2, 0)],
         "BDIM" => vec![w(0b0010, reg(&toks[1]), 3, 0)],
+        // LUI Rd,#imm6 -> Rd = (Rd<<6)|imm6 (MOV-variant, rs field == 4).
+        "LUI" => vec![w(0b0010, reg(&toks[1]), 4, imm(&toks[2]))],
+        // LDI Rd,#imm16 (pseudo): load an arbitrary 16-bit constant with no scratch
+        // register. top4<<12 | mid6<<6 | low6 = the full 16-bit value.
+        "LDI" => {
+            let (rd, v) = (reg(&toks[1]), imm(&toks[2]));
+            vec![
+                w(0b0010, rd, 0, (v >> 12) & 0x3f), // MOV Rd,#top4  (bits 15:12)
+                w(0b0010, rd, 4, (v >> 6) & 0x3f),  // LUI Rd,#mid6  (bits 11:6)
+                w(0b0010, rd, 4, v & 0x3f),         // LUI Rd,#low6  (bits 5:0)
+            ]
+        }
         "CMP" => vec![w(0b0011, 0, reg(&toks[1]), reg(&toks[2]))],
         "LDR" => vec![w(0b0100, reg(&toks[1]), reg(&toks[2]), 0)],
         // MACL Rpix           -> push (pixel=Rpix, weight=R0)

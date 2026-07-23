@@ -1,13 +1,15 @@
 `default_nettype none
 `timescale 1ns/1ns
 
-module decoder (
+module decoder #(
+    parameter DATA_BITS = 16     // datapath width; sizes decoded_immediate
+) (
     // ==========================================
     // PART 1: THE INPUT PINS (Wires coming IN)
     // ==========================================
     input wire clk,              // The heartbeat of the system (27MHz on the Tang Nano)
     input wire reset,            // The physical reset button/signal
-    
+
     input wire [3:0] core_state,
     input wire [15:0] instruction,
     
@@ -19,7 +21,7 @@ module decoder (
     output reg [3:0] decoded_rs_address,
     output reg [3:0] decoded_rt_address,
     output reg [2:0] decoded_nzp,
-    output reg [7:0] decoded_immediate,
+    output reg [DATA_BITS-1:0] decoded_immediate,
     
     // Group B: Control Flags (1-bit boolean wires turning other components ON/OFF)
     output reg decoded_reg_write_enable,           
@@ -55,6 +57,12 @@ module decoder (
     // identity register (R15/R13/R14) into rd. The selector reuses the rs field
     // (decoded_rs_address): 1->threadIdx, 2->blockIdx, 3->blockDim.
     output reg decoded_id_read,
+
+    // LUI (MOV-variant, rs field == 4): Rd = (Rd << 6) | imm6. Lets software build
+    // a full 16-bit constant in 3 ops (MOV top4 + LUI mid6 + LUI low6). Computed in
+    // the register file (no ALU/opcode change); the decoder points rs at Rd so the
+    // regfile latches the old Rd to shift.
+    output reg decoded_lui,
     
     // Pop the reconvergence stack and switch to sleeping threads
     output reg decoded_sync
@@ -117,6 +125,7 @@ module decoder (
             decoded_fc_read <= 0;
             decoded_mac_byte <= 0;
             decoded_id_read <= 0;
+            decoded_lui <= 0;
             decoded_sync <= 0;
 
         end else begin
@@ -132,7 +141,7 @@ module decoder (
                 decoded_rt_address <= {1'b0, instruction[2:0]};  // src2  -> [2:0]
 
                 // The immediate payload is the bottom 6 bits (assembler emits 6-bit imm)
-                decoded_immediate  <= {2'b0, instruction[5:0]};
+                decoded_immediate  <= {{(DATA_BITS-6){1'b0}}, instruction[5:0]};
                 decoded_nzp        <= instruction[11:9];
 
                 // Reset control wires to 0 before the switch logic applies.
@@ -156,6 +165,7 @@ module decoder (
                 decoded_fc_read <= 0;
                 decoded_mac_byte <= 0;
                 decoded_id_read <= 0;
+                decoded_lui <= 0;
                 decoded_sync <= 0;
 
                 // --- THE OPCODE SWITCH ---
@@ -192,9 +202,18 @@ module decoder (
                     end
                     MOV: begin
                         decoded_reg_write_enable <= 1;
-                        // TID/BID/BDIM variant: rs field selects an identity reg
-                        // (R15/R13/R14) to copy into rd instead of an immediate.
-                        if (instruction[8:6] != 3'b000) decoded_id_read <= 1;
+                        // rs field ([8:6]) selects the MOV variant:
+                        //   0       plain MOV: load imm6
+                        //   1/2/3   TID/BID/BDIM: copy identity reg R15/R13/R14 into rd
+                        //   4       LUI: Rd = (Rd<<6)|imm6 (point rs at Rd to read it)
+                        case (instruction[8:6])
+                            3'b000: ; // plain MOV, load immediate
+                            3'b100: begin
+                                decoded_lui <= 1;
+                                decoded_rs_address <= {1'b0, instruction[11:9]}; // read old Rd
+                            end
+                            default: decoded_id_read <= 1; // 1/2/3 identity reads
+                        endcase
                     end
                     CMP: begin
                         // Compares don't save to registers; they save N/Z/P flags.

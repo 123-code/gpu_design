@@ -5,7 +5,8 @@ module core #(
     parameter THREADS_PER_BLOCK = 4, // lanes per warp (the warp size)
     parameter WARPS_PER_CORE = 2,    // Stage 2: Multiple warps for latency hiding
     parameter BLOCK_DIM = THREADS_PER_BLOCK, // launch size: how many threads this block runs
-    parameter ADDR_BITS = 13         // width of data memory address
+    parameter ADDR_BITS = 13,        // width of data memory address
+    parameter DATA_BITS = 16         // register/ALU datapath width (memory stays byte-wide)
 ) (
     input wire clk,//clock
     input wire reset,//reset signal
@@ -52,7 +53,7 @@ module core #(
     wire [3:0] decoded_rs_address;
     wire [3:0] decoded_rt_address;
     wire [2:0] decoded_nzp;
-    wire [7:0] decoded_immediate;
+    wire [DATA_BITS-1:0] decoded_immediate;
 
     wire decoded_reg_write_enable;
     wire decoded_mem_read_enable;
@@ -71,6 +72,7 @@ module core #(
     wire decoded_fc_arg;
     wire decoded_fc_read;
     wire decoded_id_read;
+    wire decoded_lui;
     wire decoded_sync; // NEW
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
     
@@ -85,7 +87,7 @@ module core #(
     // ==========================================
     // INSTANTIATE THE (REAL) DECODER
     // ==========================================
-    decoder core_decoder (
+    decoder #(.DATA_BITS(DATA_BITS)) core_decoder (
         .clk(clk),
         .reset(reset),
         .core_state(core_state),
@@ -115,6 +117,7 @@ module core #(
         .decoded_fc_arg(decoded_fc_arg),
         .decoded_fc_read(decoded_fc_read),
         .decoded_id_read(decoded_id_read),
+        .decoded_lui(decoded_lui),
         .decoded_sync(decoded_sync),
         .decoded_mac_byte(decoded_mac_byte)
     );
@@ -135,7 +138,7 @@ module core #(
         
         .decoded_sync(decoded_sync),
         .decoded_pc_mux(decoded_pc_mux),
-        .decoded_immediate(decoded_immediate),
+        .decoded_immediate(decoded_immediate[7:0]), // branch target is PC-domain (8-bit)
         .branch_votes(branch_votes),
         // LSU-touching instruction? Lets the scheduler skip REQUEST/WAIT for
         // compute-only ops (LDR/STR/emit decode these enables).
@@ -153,11 +156,11 @@ module core #(
     // ==========================================
     // THE THREAD GRID
     // ==========================================
-    wire [7:0] rs_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire [7:0] rt_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire [7:0] alu_out_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire [7:0] lsu_out_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire [7:0] reg3_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [DATA_BITS-1:0] rs_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [DATA_BITS-1:0] rt_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [DATA_BITS-1:0] alu_out_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [DATA_BITS-1:0] lsu_out_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [7:0] reg3_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0]; // debug tap (low byte of R3)
 
     // Expose Warp 0 Thread 0's accumulator as this core's result
     assign result = reg3_bus[0][0];
@@ -167,9 +170,9 @@ module core #(
     wire [7:0] next_pc_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
     // Shared ALU inputs and outputs (Multiplexed by current_warp)
-    wire [7:0] active_rs [THREADS_PER_BLOCK-1:0];
-    wire [7:0] active_rt [THREADS_PER_BLOCK-1:0];
-    wire [7:0] active_alu_out [THREADS_PER_BLOCK-1:0];
+    wire [DATA_BITS-1:0] active_rs [THREADS_PER_BLOCK-1:0];
+    wire [DATA_BITS-1:0] active_rt [THREADS_PER_BLOCK-1:0];
+    wire [DATA_BITS-1:0] active_alu_out [THREADS_PER_BLOCK-1:0];
 
     // Flattened arrays for LSU Arbiter
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] lsu_req;
@@ -286,19 +289,27 @@ module core #(
     localparam UPDATE_STATE = 4'b0111;
     // Small operand buffers (stay in FFs: written at a variable index but read at
     // constant indices by vector_mac, so GowinSynthesis does not RAM-infer them).
-    reg  [7:0] mac_buf [0:7];    // 8 pixel slots
-    reg  [7:0] weight_buf [0:7]; // 8 weight slots
+    reg  [7:0] mac_buf [0:8];    // 9 pixel slots (3x3 conv window)
+    reg  [7:0] weight_buf [0:8]; // 9 weight slots
     reg  [3:0] mac_wptr;
     wire       mac_fire = decoded_reg_write_enable && (decoded_reg_input_mux == 2'b11)
                           && !decoded_fc_read;
 
+    integer mb;
     always @(posedge clk) begin
         if (reset) begin
             mac_wptr <= 4'd0;
+            // Zero all 9 operand slots so lanes a kernel doesn't fill contribute
+            // 0 (not stale/X) to the dot product. Matters for < 9-tap users like
+            // mac32/nn now that the MAC is 9-lane.
+            for (mb = 0; mb < 9; mb = mb + 1) begin
+                mac_buf[mb]    <= 8'd0;
+                weight_buf[mb] <= 8'd0;
+            end
         end else if (core_state == UPDATE_STATE) begin
-            if (decoded_mac_load && mac_wptr < 4'd8) begin
-                mac_buf[mac_wptr] <= rs_bus[current_warp][0];        // push a pixel from rs register
-                weight_buf[mac_wptr] <= rt_bus[current_warp][0];     // push a weight from rt register we now load one weight and one pixel simultaneously
+            if (decoded_mac_load && mac_wptr < 4'd9) begin
+                mac_buf[mac_wptr] <= rs_bus[current_warp][0][7:0];     // push a pixel from rs register (8-bit MAC lane)
+                weight_buf[mac_wptr] <= rt_bus[current_warp][0][7:0];  // push a weight from rt register (8-bit MAC lane)
                 mac_wptr <= mac_wptr + 4'd1;
             end else if (mac_fire) begin
                 mac_wptr <= 4'd0;                      // consumed -> ready for next window
@@ -316,8 +327,10 @@ module core #(
         .valid_in(1'b1),
         .px0(mac_buf[0]), .px1(mac_buf[1]), .px2(mac_buf[2]), .px3(mac_buf[3]),
         .px4(mac_buf[4]), .px5(mac_buf[5]), .px6(mac_buf[6]), .px7(mac_buf[7]),
+        .px8(mac_buf[8]),
         .w0(weight_buf[0]), .w1(weight_buf[1]), .w2(weight_buf[2]), .w3(weight_buf[3]),
         .w4(weight_buf[4]), .w5(weight_buf[5]), .w6(weight_buf[6]), .w7(weight_buf[7]),
+        .w8(weight_buf[8]),
         .result_out(vector_result_32),
         .valid_out()
     );
@@ -336,9 +349,9 @@ module core #(
         .frst  (decoded_fc_clear && (core_state == UPDATE_STATE)),
         .mac_en(decoded_fc_mac   && (core_state == UPDATE_STATE)),
         .farg  (decoded_fc_arg   && (core_state == UPDATE_STATE)),
-        .px(rs_bus[current_warp][0]),
-        .wt(rt_bus[current_warp][0]),
-        .bias_in({{24{rt_bus[current_warp][0][7]}}, rt_bus[current_warp][0]}), // Sign-extend, padding 8-bit bias to 32-bit bd sending to fc mac vector unit
+        .px(rs_bus[current_warp][0][7:0]),
+        .wt(rt_bus[current_warp][0][7:0]),
+        .bias_in({{24{rt_bus[current_warp][0][7]}}, rt_bus[current_warp][0][7:0]}), // Sign-extend low byte to 32-bit bias
         .result(fc_result_32)
     );
 
@@ -352,6 +365,9 @@ module core #(
         : (decoded_mac_byte == 2'd1) ? mac_or_fc_result_32[15:8]
         : (decoded_mac_byte == 2'd2) ? mac_or_fc_result_32[23:16]
         :                              mac_or_fc_result_32[31:24];
+    // Zero-extend the selected byte to the register width (byte-select readback
+    // unchanged: software still pulls the 32-bit MAC result out one byte at a time).
+    wire [DATA_BITS-1:0] mac_result_ext = {{(DATA_BITS-8){1'b0}}, mac_or_fc_result};
 
     genvar w, i;
     generate
@@ -360,10 +376,10 @@ module core #(
             assign active_rs[i] = rs_bus[current_warp][i];
             assign active_rt[i] = rt_bus[current_warp][i];
 
-            alu thread_alu (
+            alu #(.DATA_BITS(DATA_BITS)) thread_alu (
                 .clk(clk),
-                .opcode(current_instruction[15:12]), 
-                .imm(decoded_immediate),             
+                .opcode(current_instruction[15:12]),
+                .imm(decoded_immediate),
                 .rs(active_rs[i]),
                 .rt(active_rt[i]),
                 .alu_out(active_alu_out[i])
@@ -383,7 +399,8 @@ module core #(
                     // (warp0 = 0..3, warp1 = 4..7) so the two warps cover
                     // DISTINCT threads instead of redundantly running 0..3.
                     .THREAD_ID(w * THREADS_PER_BLOCK + i),
-                    .BLOCK_DIM(BLOCK_DIM)
+                    .BLOCK_DIM(BLOCK_DIM),
+                    .DATA_BITS(DATA_BITS)
                 ) thread_regs (
                     .clk(clk),
                     .reset(reset),
@@ -400,6 +417,7 @@ module core #(
                     .decoded_reg_write_enable(decoded_reg_write_enable),
                     .decoded_reg_input_mux(decoded_reg_input_mux),
                     .decoded_id_read(decoded_id_read),
+                    .decoded_lui(decoded_lui),
                     .decoded_immediate(decoded_immediate),
 
                     .alu_out(active_alu_out[i]), // Fed from the shared ALU!
@@ -408,18 +426,18 @@ module core #(
                     .rs(rs_bus[w][i]),
                     .rt(rt_bus[w][i]),
 
-                    .mac_result(mac_or_fc_result),
+                    .mac_result(mac_result_ext),
                     .debug_reg3(reg3_bus[w][i])
                 );
 
-                lsu #(.ADDR_BITS(ADDR_BITS)) thread_lsu (
+                lsu #(.ADDR_BITS(ADDR_BITS), .DATA_BITS(DATA_BITS)) thread_lsu (
                     .clk(clk),
-                    .reset(reset),
+                    .reset(reset), 
                     .enable(1'b1),
                     .thread_active(active_mask[w][i]),
                     .warp_active(warp_active_flag),
                     .core_state(core_state),
-
+//decoded_mac_load
                     .decoded_mem_read(decoded_mem_read_enable),
                     .decoded_mem_write(decoded_mem_write_enable),
                     .decoded_base_add(decoded_base_add),
@@ -466,11 +484,11 @@ module core #(
                     .core_state(core_state),
 
                     .decoded_nzp(decoded_nzp),
-                    .decoded_immediate(decoded_immediate),
+                    .decoded_immediate(decoded_immediate[7:0]), // branch target: PC-domain (8-bit)
                     .decoded_nzp_write_enable(decoded_nzp_write_enable),
                     .decoded_pc_mux(decoded_pc_mux),
 
-                    .alu_out(active_alu_out[i]),
+                    .alu_out(active_alu_out[i][7:0]), // pc only reads N/Z/P in [2:0]
                     .branch_taken(all_branch_votes[w][i]),
 
                     .current_pc(pc_bus[w][i]),

@@ -75,6 +75,11 @@ module tb;
     integer w, l, g, fails, timeout;
     reg [7:0] got;
     initial begin
+        $dumpfile("gpu_waveform.vcd");
+        $dumpvars(0, tb);
+    end
+
+    initial begin
         $readmemh("/Users/joseignacio/tiny-gpu-fpga/software/tid_demo.hex", prog);
 
         repeat (64) @(posedge clk);

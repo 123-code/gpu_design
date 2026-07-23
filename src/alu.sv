@@ -1,13 +1,15 @@
 `default_nettype none
 `timescale 1ns/1ns
 
-module alu (
-    input wire clk,             
-    input wire [3:0] opcode,    
-    input wire [7:0] imm,       
-    input wire [7:0] rs,        
-    input wire [7:0] rt,        
-    output reg [7:0] alu_out    
+module alu #(
+    parameter DATA_BITS = 16    // datapath width (was hardwired 8)
+) (
+    input wire clk,
+    input wire [3:0] opcode,
+    input wire [DATA_BITS-1:0] imm,
+    input wire [DATA_BITS-1:0] rs,
+    input wire [DATA_BITS-1:0] rt,
+    output reg [DATA_BITS-1:0] alu_out
 );
 
     // General-purpose arithmetic/logic primitives. Multiply is now a single
@@ -26,14 +28,14 @@ module alu (
         case (opcode)
             ADD:  alu_out = rs + rt;
             SUB:  alu_out = rs - rt;
-            MUL:  alu_out = rs * rt;  // low 8 bits of the product
-            SHR:  alu_out = rs >> rt[2:0];
-            SHL:  alu_out = rs << rt[2:0];
+            MUL:  alu_out = rs * rt;  // low DATA_BITS of the product
+            SHR:  alu_out = rs >> rt[3:0];  // shift amount up to 15 (16-bit datapath)
+            SHL:  alu_out = rs << rt[3:0];
             ADDI: alu_out = rs + imm; // second operand is the immediate
             MOV:  alu_out = imm;      // Pass the payload directly through!
             // CMP produces the N/Z/P flags that pc.sv latches from alu_out[2:0]:
             //   bit2 = N (rs <  rt), bit1 = Z (rs == rt), bit0 = P (rs > rt)
-            CMP: alu_out = {5'b0, (rs < rt), (rs == rt), (rs > rt)};
+            CMP: alu_out = {{(DATA_BITS-3){1'b0}}, (rs < rt), (rs == rt), (rs > rt)};
             default: alu_out = 8'd0;
         endcase
     end

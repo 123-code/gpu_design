@@ -6,7 +6,7 @@ module registers #(
     parameter THREADS_PER_BLOCK = 4,
     parameter THREAD_ID = 0,                  // GLOBAL thread index within the block
     parameter BLOCK_DIM = THREADS_PER_BLOCK,  // launch size reported as %blockDim
-    parameter DATA_BITS = 8
+    parameter DATA_BITS = 16
 ) (
     // ==========================================
     // PART 1: SYSTEM PINS (Power and State)
@@ -35,6 +35,10 @@ module registers #(
     // picked by decoded_rs_address (1->R15, 2->R13, 3->R14) into rd.
     input wire decoded_id_read,
 
+    // LUI: when high, write (rs << 6) | imm6 into rd. The decoder points rs at rd,
+    // so rs holds the old Rd -> this shifts in 6 fresh low bits per LUI.
+    input wire decoded_lui,
+
     // ==========================================
     // PART 3: DATA PINS IN (Wires bringing answers back)
     // ==========================================
@@ -44,14 +48,14 @@ module registers #(
     // ==========================================
     // PART 4: DATA PINS OUT (Wires feeding the ALU/Memory)
     // ==========================================
-    output reg [7:0] rs,
-    output reg [7:0] rt,
+    output reg [DATA_BITS-1:0] rs,
+    output reg [DATA_BITS-1:0] rt,
 
     // Result from the shared 3x3 MAC unit (written back by the MAC instruction)
     input wire [DATA_BITS-1:0] mac_result,
 
-    // Debug tap: continuously expose R3 (the kernel's accumulator) so the
-    // top-level wrapper can show the result on the board LEDs.
+    // Debug tap: expose the low 8 bits of R3 (the kernel's accumulator) so the
+    // top-level wrapper can show the result on the board LEDs (LEDs are 8-bit).
     output wire [7:0] debug_reg3
 );
 
@@ -67,10 +71,10 @@ module registers #(
     // This creates an array of 16 slots, where each slot holds an 8-bit wire bundle.
     // (Stays in flip-flops: it has many read ports, so GowinSynthesis keeps it as
     // registers rather than inferring RAM.)
-    reg [7:0] registers[15:0];
+    reg [DATA_BITS-1:0] registers[15:0];
 
     // Debug tap (declared after the register array so the assign is legal)
-    assign debug_reg3 = registers[3];
+    assign debug_reg3 = registers[3][7:0];
 
     // The Clocked Logic Machinery
     always @(posedge clk) begin
@@ -119,6 +123,9 @@ module registers #(
                             4'd3: registers[decoded_rd_address] <= registers[14]; // BDIM -> blockDim
                             default: registers[decoded_rd_address] <= registers[15];
                         endcase
+                    end else if (decoded_lui) begin
+                        // LUI: shift old Rd (latched into rs) up 6 and OR in imm6.
+                        registers[decoded_rd_address] <= (rs << 6) | decoded_immediate[5:0];
                     end else begin
                         // The Multiplexer: Which incoming wire are we saving? [cite: 342]
                         case (decoded_reg_input_mux)

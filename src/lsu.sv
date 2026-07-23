@@ -2,7 +2,8 @@
 `timescale 1ns/1ns
 
 module lsu #(
-    parameter ADDR_BITS = 13
+    parameter ADDR_BITS = 13,
+    parameter DATA_BITS = 16          // register-side datapath width; memory stays byte-wide
 ) (//clock, reset and enable wires
     input wire clk,
     input wire reset,
@@ -16,11 +17,11 @@ module lsu #(
     input wire decoded_mem_write,        // 1 = STR store instruction
     input wire decoded_base_add,         // 1 = ADDB  read window (read base  += immediate)
     input wire decoded_wbase_add,        // 1 = WBASE slide read window forward (write base += immediate)
-    input wire [7:0] decoded_immediate,  // amount to add to a base
+    input wire [DATA_BITS-1:0] decoded_immediate,  // amount to add to a base
 
     // Data Pins (From Registers)
-    input wire [7:0] rs,                 // data that determines the address
-    input wire [7:0] rt,                // //data target register
+    input wire [DATA_BITS-1:0] rs,       // data that determines the address
+    input wire [DATA_BITS-1:0] rt,       // data target register (only low 8 bits hit byte-wide memory)
 
     // Highway to Arbiter/FIFO (reads)
     output reg mem_valid,                // LSU requests data"
@@ -46,7 +47,7 @@ module lsu #(
 
     // Output back to Thread
     output reg [1:0] lsu_state,          // broadcasts LSU state to scheduler
-    output reg [7:0] lsu_out             // data goes to this register when read is finished
+    output reg [DATA_BITS-1:0] lsu_out   // data goes to this register when read is finished (zero-extended byte)
 );
 
     localparam MMIO_TX = 8'd63;          // reserved offset -> UART TX register
@@ -82,9 +83,9 @@ module lsu #(
         end else if (enable) begin
             // Base pointers only update if THIS warp is active and in UPDATE state
             if (decoded_base_add && core_state == 4'b0111 && warp_active)
-                base <= base + decoded_immediate;
+                base <= base + decoded_immediate[ADDR_BITS-1:0];
             if (decoded_wbase_add && core_state == 4'b0111 && warp_active)
-                wbase <= wbase + decoded_immediate;
+                wbase <= wbase + decoded_immediate[ADDR_BITS-1:0];
 
             case (lsu_state)
                 // ---- 00 IDLE: wake at REQUEST, capture read/write intent ----
@@ -108,17 +109,17 @@ module lsu #(
                 2'b01: begin
                     if (active_is_read) begin
                         mem_valid <= 1'b1;
-                        mem_addr  <= base + rs;
+                        mem_addr  <= base + rs[ADDR_BITS-1:0];
                         lsu_state <= 2'b10;
                     end else begin
                         if (rs == MMIO_TX) begin
                             emit_valid <= 1'b1;            // offset 63 -> UART TX
-                            emit_data  <= rt;
+                            emit_data  <= rt[7:0];         // byte-wide UART
                             lsu_state  <= 2'b10;
                         end else begin
                             we_req    <= 1'b1;             // request a BRAM write
-                            waddr     <= wbase + rs;
-                            wdata     <= rt;
+                            waddr     <= wbase + rs[ADDR_BITS-1:0];
+                            wdata     <= rt[7:0];          // byte-wide memory: store low byte
                             lsu_state <= 2'b10;            // wait for the arbiter grant
                         end
                     end
@@ -129,7 +130,7 @@ module lsu #(
                     if (active_is_read) begin
                         if (mem_ready) begin
                             mem_valid <= 1'b0;
-                            lsu_out   <= mem_read_data;
+                            lsu_out   <= {{(DATA_BITS-8){1'b0}}, mem_read_data};  // zero-extend byte load
                             lsu_state <= 2'b11;
                         end
                     end else if (emit_valid) begin
