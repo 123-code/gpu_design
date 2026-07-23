@@ -30,36 +30,55 @@ WBINIT: WBASE #63
 ; ============================================================================
         MOV   R3, #0              ; y (row)
 CY:     MOV   R2, #0              ; x (col)
-CX:     MOV   R1, #0              ; --- gather 3x3 window: 9x (LDR pixel; MACL) ---
+; --- 3x3 conv, GPGPU style: per tap load pixel + weight (program immediate via
+;     LDI) and MACL the pair. Weights live in the PROGRAM, not the bitstream. ---
+CX:     MOV   R1, #0
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #95             ; w00 = 0x5F
+        MACL  R4, R7
         MOV   R1, #1
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #27             ; w01 = 0x1B
+        MACL  R4, R7
         MOV   R1, #2
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #0              ; w02 = 0x00
+        MACL  R4, R7
         MOV   R1, #28
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #68             ; w10 = 0x44
+        MACL  R4, R7
         MOV   R1, #29
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #101            ; w11 = 0x65
+        MACL  R4, R7
         MOV   R1, #30
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #50             ; w12 = 0x32
+        MACL  R4, R7
         MOV   R1, #56
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #127            ; w20 = 0x7F
+        MACL  R4, R7
         MOV   R1, #57
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #127            ; w21 = 0x7F
+        MACL  R4, R7
         MOV   R1, #58
         LDR   R4, [R1]
-        MACL  R4
+        LDI   R7, #70             ; w22 = 0x46
+        MACL  R4, R7
 
-        MAC   R5                  ; fire 3x3 MAC -> R5 (ReLU + quantized 8-bit)
-        STR   R5, [R0]            ; conv_map[wbase] = R5
+        ; --- read raw 32-bit dot product, software ReLU/quantize ---
+        ; all weights >=0 and pixels >=0 => sum >=0, so ReLU is a no-op here.
+        ; quant: (sum>>8)>255 ? 255 : sum[15:8].  sum>=65536 <=> byte2 != 0.
+        MAC   R7, #2              ; R7 = sum bits [23:16]
+        CMP   R7, R0             ; byte2 == 0 ?   (R0 = 0)
+        BRz   QLOW
+        LDI   R5, #255            ; saturate high
+        BR    QDONE
+QLOW:   MAC   R5, #1             ; R5 = sum[15:8] (= sum>>8, in range)
+QDONE:  STR   R5, [R0]            ; conv_map[wbase] = R5
         WBASE #1                  ; advance write pointer
         ADDB  #1                  ; slide window right one pixel
 
