@@ -11,6 +11,8 @@ sim_divmerge
 sim_warps
 sim_mac32
 sim_mlp
+sim_mlp2
+sim_facc
 *.vcd
 
 # Open-source build flow generated artifacts (run_oss.sh is kept; *.fs already ignored)
@@ -57,3 +59,7 @@ sim_demo
 core.gds
 drills/sim_*
 obj_vl/
+
+# ML compiler outputs (regenerate with `make mlc`)
+software/build/
+software/models/

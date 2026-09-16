@@ -6,7 +6,7 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp
+.PHONY: mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp
 
 # Run any testbench under Verilator (the tool the job posting names) instead of
 # iverilog. Verilator is a stricter linter and much faster; --timing lets it
@@ -76,6 +76,23 @@ sim-mnist-jpp:  ## AI demo: the MNIST classifier written in J++ (mnist_fc.jpp) p
 	cd software && cargo run --quiet -- mnist_fc_jpp.asm mnist_fc_jpp.hex
 	$(IVERILOG) -g2012 -s tb -o sim_mnist_jpp test/tb_mnist_jpp.sv src/*.sv
 	$(VVP) sim_mnist_jpp
+
+# ---- ML compiler: model JSON -> data image + kernel, nothing baked in the bitstream ----
+MODEL ?= mlp_169_32_10
+mlc:            ## Compile a model: export -> graph_compiler -> asm -> hex. Usage: make mlc MODEL=mlp_169_32_10
+	cd software && python3 export_model.py models/$(MODEL).json
+	cd software && cargo run --quiet --bin graph_compiler -- models/$(MODEL).json
+	cd software && cargo run --quiet -- build/$(MODEL).asm build/$(MODEL).hex
+
+sim-mlp2:       ## AI demo: 2-layer int8 MLP, compiled end to end, checked byte-for-byte vs the reference
+	$(MAKE) mlc
+	$(IVERILOG) -g2012 -s tb -o sim_mlp2 test/tb_mlp2.sv src/*.sv
+	$(VVP) sim_mlp2
+
+run-mlp2:       ## Run the compiled 2-layer MLP on the FPGA and read back scores + prediction
+	$(MAKE) mlc
+	cd software && python3 send_kernel.py build/$(MODEL).hex \
+	    --data-hex build/$(MODEL).data.hex --pad 1 --read 24
 
 sim-nn:         ## AI demo: a neuron written in J++ (nn.jpp) runs on the MAC, computes 64
 	cd software && cargo run --quiet --bin jpp -- nn.jpp nn.asm

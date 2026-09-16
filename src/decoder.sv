@@ -49,6 +49,9 @@ module decoder #(
     output reg decoded_fc_mac,     // FMAC : acc += rs*rt
     output reg decoded_fc_arg,     // FARG : finalize current digit (add bias, argmax)
     output reg decoded_fc_read,    // FBEST: rd <- best_idx (uses the MAC writeback mux)
+    output reg decoded_fc_acc,     // FACC : rd <- byte n of the raw accumulator
+    output reg decoded_fc_out,     // FOUT : rd <- requantized+ReLU'd neuron output
+    output reg [2:0] decoded_fc_shift, // FOUT : extra right shift beyond 8
 
     // Which 8-bit slice of the 32-bit MAC/FC result to write back (MAC Rd,#n).
     // 0 = [7:0] (LSB) ... 3 = [31:24] (MSB). 0 for every non-MAC instruction.
@@ -123,6 +126,9 @@ module decoder #(
             decoded_fc_mac <= 0;
             decoded_fc_arg <= 0;
             decoded_fc_read <= 0;
+            decoded_fc_acc <= 0;
+            decoded_fc_out <= 0;
+            decoded_fc_shift <= 0;
             decoded_mac_byte <= 0;
             decoded_id_read <= 0;
             decoded_lui <= 0;
@@ -163,6 +169,9 @@ module decoder #(
                 decoded_fc_mac <= 0;
                 decoded_fc_arg <= 0;
                 decoded_fc_read <= 0;
+                decoded_fc_acc <= 0;
+                decoded_fc_out <= 0;
+                decoded_fc_shift <= 0;
                 decoded_mac_byte <= 0;
                 decoded_id_read <= 0;
                 decoded_lui <= 0;
@@ -180,11 +189,33 @@ module decoder #(
                         case (instruction[5:4])
                             2'b00: decoded_fc_clear <= 1;
                             2'b01: decoded_fc_mac   <= 1;
-                            2'b10: decoded_fc_arg   <= 1;
+                            2'b10: begin
+                                // instruction[3] splits this slot:
+                                //   0 = FARG (finalize a CLASSIFIER digit: add
+                                //       bias, argmax, clear acc)
+                                //   1 = FOUT (finalize a HIDDEN neuron: shift,
+                                //       clamp, ReLU into rd, clear acc)
+                                if (instruction[3]) begin
+                                    decoded_fc_out           <= 1;
+                                    decoded_fc_shift         <= instruction[2:0];
+                                    decoded_reg_write_enable <= 1;
+                                    decoded_reg_input_mux    <= MUX_MAC;
+                                    decoded_fc_read          <= 1;
+                                end else begin
+                                    decoded_fc_arg           <= 1;
+                                end
+                            end
                             2'b11: begin
+                                // Read the FC unit back into rd. instruction[3]
+                                // selects WHAT: 0 = best_idx (FBEST, the legacy
+                                // encoding, low bits all zero), 1 = the raw 32-bit
+                                // accumulator (FACC). instruction[1:0] selects
+                                // which byte, reusing the MAC byte-select mux.
                                 decoded_reg_write_enable <= 1;
                                 decoded_reg_input_mux    <= MUX_MAC;
                                 decoded_fc_read          <= 1;
+                                decoded_fc_acc           <= instruction[3];
+                                decoded_mac_byte         <= instruction[1:0];
                             end
                         endcase
                     end

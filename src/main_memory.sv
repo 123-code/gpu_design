@@ -24,15 +24,15 @@ module main_memory #(
 );
     reg [7:0] mem [0:DEPTH-1];
 
-    // Bake the FC interleaved buffer at synthesis: weights in the odd slots, the
-    // even (feature) slots zeroed -- the GPU's scatter pass fills them after pool.
-    // 3380 entries land at FC_BUF_BASE. (The image and scratch regions are filled
-    // at runtime by the DMA and the GPU's write port.)
-`ifndef FC_BUF_HEX
-    `define FC_BUF_HEX "/Users/joseignacio/tiny-gpu-fpga/software/mnist_data/fc_buf_init.hex"
-`endif
-    parameter FC_BUF_BASE = 2048;
-    initial $readmemh(`FC_BUF_HEX, mem, FC_BUF_BASE, FC_BUF_BASE + 3380 - 1);
+    // NO baked model. This memory used to $readmemh 3380 bytes of interleaved
+    // MNIST FC weights at synthesis time, which meant changing the network meant
+    // re-synthesizing the bitstream -- the model was part of the hardware.
+    //
+    // Every weight now arrives over UART as data, planned and packed by the
+    // compiler (software/src/bin/graph_compiler.rs). The bitstream is
+    // model-independent. Nothing depended on the baked copy: each testbench
+    // already streamed its own payload, and the DMA overwrote these addresses
+    // before the kernel read them.
 
     always @(posedge clk) begin
         if (we) mem[waddr] <= wdata;     // DMA / GPU store

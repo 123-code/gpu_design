@@ -71,6 +71,9 @@ module core #(
     wire decoded_fc_mac;
     wire decoded_fc_arg;
     wire decoded_fc_read;
+    wire decoded_fc_acc;
+    wire decoded_fc_out;
+    wire [2:0] decoded_fc_shift;
     wire decoded_id_read;
     wire decoded_lui;
     wire decoded_sync; // NEW
@@ -116,6 +119,9 @@ module core #(
         .decoded_fc_mac(decoded_fc_mac),
         .decoded_fc_arg(decoded_fc_arg),
         .decoded_fc_read(decoded_fc_read),
+        .decoded_fc_acc(decoded_fc_acc),
+        .decoded_fc_out(decoded_fc_out),
+        .decoded_fc_shift(decoded_fc_shift),
         .decoded_id_read(decoded_id_read),
         .decoded_lui(decoded_lui),
         .decoded_sync(decoded_sync),
@@ -342,6 +348,8 @@ module core #(
     // it (SIMT-uniform). FCLR/FMAC act in UPDATE; FRD reads it back through the
     // MAC writeback mux (mux==11 with decoded_fc_read selecting fc over conv).
     wire [31:0] fc_result_32;
+    wire [31:0] fc_acc_32;      // raw accumulator, read by FACC
+    wire [7:0]  fc_relu_8;      // requantized+ReLU'd neuron output, read by FOUT
 
     fc_mac u_fc (
         .clk(clk),
@@ -349,17 +357,26 @@ module core #(
         .frst  (decoded_fc_clear && (core_state == UPDATE_STATE)),
         .mac_en(decoded_fc_mac   && (core_state == UPDATE_STATE)),
         .farg  (decoded_fc_arg   && (core_state == UPDATE_STATE)),
+        .fout  (decoded_fc_out   && (core_state == UPDATE_STATE)),
+        .out_shift(decoded_fc_shift),
         .px(rs_bus[current_warp][0][7:0]),
         .wt(rt_bus[current_warp][0][7:0]),
         .bias_in({{24{rt_bus[current_warp][0][7]}}, rt_bus[current_warp][0][7:0]}), // Sign-extend low byte to 32-bit bias
-        .result(fc_result_32)
+        .result(fc_result_32),
+        .acc_out(fc_acc_32),
+        .relu_out(fc_relu_8)
     );
 
     // Writeback source for the shared MAC mux: conv MAC normally, FC readout on FRD.
     // Both units produce a 32-bit result; decoded_mac_byte (from MAC Rd,#n) picks
     // which 8-bit slice reaches the 8-bit register file, so software can pull the
     // whole 32-bit value out across four reads. Bare MAC / FBEST => byte 0 (LSB).
-    wire [31:0] mac_or_fc_result_32 = decoded_fc_read ? fc_result_32 : vector_result_32;
+    // FACC (decoded_fc_acc) reads the raw accumulator; FBEST reads best_idx;
+    // everything else reads the 9-lane conv MAC.
+    wire [31:0] fc_readback_32 = decoded_fc_out ? {24'd0, fc_relu_8}
+                               : decoded_fc_acc ? fc_acc_32
+                               :                  fc_result_32;
+    wire [31:0] mac_or_fc_result_32 = decoded_fc_read ? fc_readback_32 : vector_result_32;
     wire [7:0] mac_or_fc_result =
           (decoded_mac_byte == 2'd0) ? mac_or_fc_result_32[7:0]
         : (decoded_mac_byte == 2'd1) ? mac_or_fc_result_32[15:8]

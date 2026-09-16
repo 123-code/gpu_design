@@ -155,7 +155,20 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "FRST" => vec![0x0000],                                   // [5:4]=00 reset engine
         "FMAC" => vec![w(0b0000, 0, reg(&toks[1]), 0b010_000 | (reg(&toks[2]) & 7))], // [5:4]=01
         "FARG" => vec![w(0b0000, 0, 0, 0b100_000)],               // [5:4]=10 finalize digit
+        // FOUT Rd,#t : finalize a HIDDEN neuron -> rd = clamp(acc >>> (8+t), 0, 255),
+        // then clear acc. Requantize + saturate + ReLU in one instruction. Shares
+        // the FARG slot; bit 3 picks FOUT over FARG. t is 0..7, so the effective
+        // shift is 8..15 — which covers any layer with >= 2 taps (below that the
+        // accumulator cannot exceed 16 bits anyway).
+        "FOUT" => vec![w(0b0000, reg(&toks[1]), 0,
+                          0b101_000 | (toks.get(2).map_or(0, |t| imm(t) & 7)))],
         "FBEST" => vec![w(0b0000, reg(&toks[1]), 0, 0b110_000)],  // [5:4]=11 rd <- best_idx
+        // FACC Rd,#n : rd <- byte n (0..3) of the raw 32-bit FC accumulator.
+        // Shares the [5:4]=11 readback slot with FBEST; bit 3 picks acc over
+        // best_idx, bits [1:0] pick the byte. A hidden layer reads its dot
+        // product out this way, then requantizes it in software.
+        "FACC" => vec![w(0b0000, reg(&toks[1]), 0,
+                          0b111_000 | toks.get(2).map_or(0, |t| imm(t) & 0b11))],
 
         // ---- MAX Rd,Ra,Rb  (pseudo): Rd = max(Ra,Rb) ----
         // ADDI Rd,Ra,#0 ; CMP Rb,Ra ; BRn skip ; ADDI Rd,Rb,#0 ; skip:

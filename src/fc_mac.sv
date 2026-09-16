@@ -35,11 +35,25 @@ module fc_mac #(
     input  wire        frst,             // FRST : reset the FC engine
     input  wire        mac_en,           // FMAC : acc += px*wt
     input  wire        farg,             // FARG : finalize current digit
+    input  wire        fout,             // FOUT : finalize a HIDDEN neuron
+    input  wire [2:0]  out_shift,        // FOUT : extra right shift beyond 8
     input  wire [7:0]  px,               // pixel  (unsigned 0..255)
     input  wire [7:0]  wt,               // weight (signed int8)
     input  wire signed [31:0] bias_in,   // unused: biases come from bias_rom below
 
-    output wire signed [31:0] result     // FBEST reads result[7:0] = best_idx
+    output wire signed [31:0] result,    // FBEST reads result[7:0] = best_idx
+    // Raw accumulator, for hidden layers. FARG folds acc into the argmax and
+    // clears it, which is all a FINAL classifier layer needs -- but a hidden
+    // layer has to read its own dot product back out, requantize it and store
+    // it as the next layer's input. FACC Rd,#n reads byte n of this.
+    output wire signed [31:0] acc_out,
+    // FOUT readback: requantize + ReLU in one step.
+    //   clamp( acc >>> (8 + out_shift), 0, 255 )
+    // The low clamp IS the ReLU, and the high clamp is the saturation a
+    // quantized layer needs. Doing this in software would cost ~10 instructions
+    // (the 32-bit acc has to come out a byte at a time, shift amounts must live
+    // in registers, and a 6-bit MOV immediate cannot even hold 255).
+    output wire [7:0]  relu_out
 );
     /* verilator lint_off UNUSED */
     wire signed [31:0] _unused_bias = bias_in;
@@ -70,6 +84,8 @@ module fc_mac #(
             best_idx <= 4'd0;
         end else if (mac_en) begin
             acc <= acc + prod;
+        end else if (fout) begin
+            acc <= 32'sd0;               // finalize this neuron, ready for the next
         end else if (farg) begin
             if (digit == 4'd0 || score > best) begin
                 best     <= score;
@@ -80,5 +96,13 @@ module fc_mac #(
         end
     end
 
-    assign result = {28'd0, best_idx};
+    assign result  = {28'd0, best_idx};
+    assign acc_out = acc;
+
+    // Arithmetic right shift keeps the sign, so a negative pre-activation stays
+    // negative and ReLUs to 0 rather than wrapping to a large positive byte.
+    wire signed [31:0] shifted = acc >>> (6'd8 + {3'b000, out_shift});
+    assign relu_out = shifted[31]      ? 8'd0      // negative -> ReLU
+                    : (|shifted[31:8]) ? 8'd255    // overflow -> saturate
+                    :                    shifted[7:0];
 endmodule
