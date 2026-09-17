@@ -53,28 +53,36 @@ def main():
             s += 1
         return s
 
-    layers = [
-        {"name": "fc1", "in_features": 169, "out_features": 32,
-         "activation": "relu", "shift": pick_shift(169),
-         "weights": qweights(rng, 32 * 169)},
-        {"name": "fc2", "in_features": 32, "out_features": 10,
-         "activation": "relu", "shift": pick_shift(32),
-         "weights": qweights(rng, 10 * 32)},
-    ]
+    # SSA graph: tensors by name, nodes in execution order. The compiler owns
+    # fusion (Linear->Relu becomes one FMAC loop + FOUT) and memory placement.
+    fc = [("fc1", 169, 32), ("fc2", 32, 10)]
+    tensors = {"%x0": {"shape": [169], "data": x0}}
+    nodes = []
+    x = "%x0"
+    for i, (name, fin, fout) in enumerate(fc, 1):
+        w, z, a = f"%w{i}", f"%z{i}", f"%x{i}"
+        tensors[w] = {"shape": [fout, fin], "data": qweights(rng, fout * fin)}
+        tensors[z] = {"shape": [fout]}
+        tensors[a] = {"shape": [fout]}
+        nodes.append({"op": "Linear", "name": name, "inputs": [x, w], "output": z,
+                      "attrs": {"shift": pick_shift(fin)}})
+        nodes.append({"op": "Relu", "inputs": [z], "output": a})
+        x = a
+    tensors["%out"] = {"shape": [1]}
+    nodes.append({"op": "Argmax", "inputs": [x], "output": "%out"})
 
     model = {
         "model_name": "mlp_169_32_10",
         "memory_budget_bytes": 8192,   # main_memory.sv ADDR_BITS = 13
-        "input": {"name": "x0", "data": x0},
-        "layers": layers,
+        "tensors": tensors,
+        "nodes": nodes,
     }
 
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(model, f)
-    total = sum(l["in_features"] * l["out_features"] for l in layers)
-    print(f"wrote {out_path}: {len(layers)} layers, {total} weights, "
-          f"shifts={[l['shift'] for l in layers]}")
+    print(f"wrote {out_path}: {len(nodes)} nodes, "
+          f"shifts={[n['attrs']['shift'] for n in nodes if n['op'] == 'Linear']}")
 
 
 if __name__ == "__main__":

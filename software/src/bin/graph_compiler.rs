@@ -1,6 +1,7 @@
 // tiny-gpu ML compiler: a quantized graph -> (data image, kernel, expected output).
 //
-//   models/*.json  --[plan]-->  byte image the host DMAs to address 0
+//   models/*.json  --[lower]-->  legalize + fuse Linear/Relu
+//                  --[plan]-->  byte image the host DMAs to address 0
 //                  --[codegen]->  tiny-gpu assembly
 //                  --[eval]---->  the bytes the hardware must emit
 //
@@ -13,20 +14,50 @@
 // Usage: cargo run --bin graph_compiler -- [models/foo.json]
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::fs;
 
 // ---- hardware limits the compiler is required to respect ----
 const ROM_WORDS: usize = 256; // program_memory.sv DEPTH (branch targets are 8-bit)
 const MMIO_TX: usize = 63;    // lsu.sv: a STR to this address is the UART, not memory
 
+// ---- graph IR (what the frontend writes) --------------------------------
+
 #[derive(Deserialize)]
-struct Input {
-    #[allow(dead_code)]
-    name: String,
-    data: Vec<u8>,
+struct Tensor {
+    shape: Vec<usize>,
+    /// Present for constants (weights) and the graph input; absent for activations.
+    #[serde(default)]
+    data: Option<Vec<i32>>,
+}
+
+#[derive(Deserialize, Default)]
+struct Attrs {
+    #[serde(default)]
+    shift: u32,
 }
 
 #[derive(Deserialize)]
+struct Node {
+    op: String,
+    #[serde(default)]
+    name: Option<String>,
+    inputs: Vec<String>,
+    output: String,
+    #[serde(default)]
+    attrs: Attrs,
+}
+
+#[derive(Deserialize)]
+struct Graph {
+    model_name: String,
+    memory_budget_bytes: usize,
+    tensors: BTreeMap<String, Tensor>,
+    nodes: Vec<Node>,
+}
+
+// ---- lowered model (what codegen consumes) -------------------------------
+
 struct Layer {
     name: String,
     in_features: usize,
@@ -37,12 +68,87 @@ struct Layer {
     weights: Vec<i32>,
 }
 
-#[derive(Deserialize)]
 struct Model {
     model_name: String,
     memory_budget_bytes: usize,
-    input: Input,
+    input: Vec<u8>,
     layers: Vec<Layer>,
+}
+
+/// Legalize + fuse. The graph must be a chain
+///   Linear -> (Relu | <Argmax>) -> Linear -> ... -> Argmax
+/// and every Linear is fused with its Relu into one FMAC loop + FOUT, because
+/// FOUT is the only way the hardware can read a neuron back.
+fn lower(g: Graph) -> Result<Model, String> {
+    for n in &g.nodes {
+        if !["Linear", "Relu", "Argmax"].contains(&n.op.as_str()) {
+            return Err(format!("unsupported op '{}' (output {}): legal ops are Linear, Relu, Argmax", n.op, n.output));
+        }
+    }
+    let tensor = |name: &str| g.tensors.get(name).ok_or_else(|| format!("undefined tensor {}", name));
+
+    let first = g.nodes.first().ok_or("empty graph")?;
+    let x0 = first.inputs.first().ok_or("first node has no input")?;
+    let input: Vec<u8> = tensor(x0)?.data.as_ref()
+        .ok_or_else(|| format!("graph input {} has no data", x0))?
+        .iter().map(|&v| u8::try_from(v).map_err(|_| format!("input {}: value {} is not u8", x0, v)))
+        .collect::<Result<_, _>>()?;
+
+    let mut layers = Vec::new();
+    let (mut cur, mut width) = (x0.clone(), input.len());
+    let mut it = g.nodes.iter().peekable();
+    while let Some(n) = it.next() {
+        match n.op.as_str() {
+            "Linear" => {
+                let (x, w) = match n.inputs.as_slice() {
+                    [x, w] => (x, w),
+                    _ => return Err(format!("Linear {}: expected [x, w] (bias is not supported by the hardware)", n.output)),
+                };
+                if *x != cur {
+                    return Err(format!("Linear {}: input {} is not the previous output {} (only chains are supported)", n.output, x, cur));
+                }
+                let wt = tensor(w)?;
+                let data = wt.data.as_ref().ok_or_else(|| format!("weight {} has no data", w))?;
+                let (out_f, in_f) = match wt.shape.as_slice() {
+                    [o, i] => (*o, *i),
+                    s => return Err(format!("weight {}: shape {:?}, expected [out, in]", w, s)),
+                };
+                if in_f != width {
+                    return Err(format!("Linear {}: weight {} expects {} inputs, got {}", n.output, w, in_f, width));
+                }
+                // FOUT always clamps at 0, so a Linear only lowers when its
+                // consumer is Relu (exact) or Argmax (see below).
+                let next = it.peek().map(|m| (m.op.as_str(), m.inputs == [n.output.clone()], m.output.clone()));
+                cur = match next {
+                    Some(("Relu", true, out)) => { it.next(); out }
+                    // ponytail: Linear->Argmax lowers through FOUT's ReLU clamp too, so
+                    // negative logits tie at 0 and argmax picks the first. Exact fix = FACC
+                    // 32-bit compare, if calibration shows the clamp costs accuracy.
+                    Some(("Argmax", true, _)) => n.output.clone(),
+                    _ => return Err(format!("Linear {} is not followed by Relu or Argmax: a bare Linear has no lowering", n.output)),
+                };
+                layers.push(Layer {
+                    name: n.name.clone().unwrap_or_else(|| n.output.clone()),
+                    in_features: in_f,
+                    out_features: out_f,
+                    shift: n.attrs.shift,
+                    weights: data.clone(),
+                });
+                width = out_f;
+            }
+            "Argmax" => {
+                if n.inputs != [cur.clone()] || it.peek().is_some() {
+                    return Err(format!("Argmax {} must be the last node and consume {}", n.output, cur));
+                }
+                if layers.is_empty() {
+                    return Err("Argmax with no Linear before it".into());
+                }
+                return Ok(Model { model_name: g.model_name, memory_budget_bytes: g.memory_budget_bytes, input, layers });
+            }
+            _ => return Err(format!("Relu {} does not follow a Linear", n.output)),
+        }
+    }
+    Err("graph does not end in Argmax (the epilogue emits scores + argmax)".into())
 }
 
 /// Where every tensor lives, and the bytes the host must load.
@@ -64,7 +170,7 @@ fn plan(m: &Model) -> Result<Plan, String> {
 
     // Everything the host has to supply goes first, contiguously from address 0,
     // because the DMA writes the payload sequentially starting there.
-    image.extend_from_slice(&m.input.data);
+    image.extend_from_slice(&m.input);
     for l in &m.layers {
         w.push(image.len());
         if l.weights.len() != l.in_features * l.out_features {
@@ -244,7 +350,7 @@ fn word_count(asm: &[String]) -> usize {
 /// fc_mac.sv's relu_out exactly, including saturation.
 fn eval(m: &Model) -> (Vec<Vec<u8>>, usize) {
     let mut acts: Vec<Vec<u8>> = Vec::new();
-    let mut x: Vec<u8> = m.input.data.clone();
+    let mut x: Vec<u8> = m.input.clone();
     for l in &m.layers {
         let mut out = Vec::with_capacity(l.out_features);
         for o in 0..l.out_features {
@@ -272,7 +378,8 @@ fn eval(m: &Model) -> (Vec<Vec<u8>>, usize) {
 fn main() {
     let path = std::env::args().nth(1).unwrap_or_else(|| "models/mlp_169_32_10.json".into());
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {}", path, e));
-    let model: Model = serde_json::from_str(&src).expect("bad model JSON");
+    let graph: Graph = serde_json::from_str(&src).expect("bad graph JSON");
+    let model = lower(graph).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
 
     let p = plan(&model).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
     check(&model, &p).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
