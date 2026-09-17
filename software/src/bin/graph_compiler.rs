@@ -272,6 +272,10 @@ fn plan(m: &Model) -> Result<Plan, String> {
     // the image and cost nothing on the wire.
     let mut cursor = image.len();
     for l in &m.layers {
+        // a store to MMIO_TX is the UART, not memory: never place a GPU-written buffer over it
+        if (cursor..cursor + l.out_len()).contains(&MMIO_TX) {
+            cursor = MMIO_TX + 1;
+        }
         x.push(cursor);
         cursor += l.out_len();
     }

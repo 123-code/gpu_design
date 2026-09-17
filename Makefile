@@ -94,6 +94,10 @@ sim-mlp2:       ## AI demo: 2-layer int8 MLP, compiled end to end, checked byte-
 	$(IVERILOG) -g2012 -s tb -o sim_mlp2 test/tb_mlp2.sv src/*.sv
 	$(VVP) sim_mlp2
 
+FUZZ_N ?= 200
+fuzz:           ## Differential fuzz: FUZZ_N random models, graph reference == compiler reference == RTL (seed with FUZZ_SEED)
+	cd software && python3 fuzz_mlc.py --n $(FUZZ_N) --seed $(or $(FUZZ_SEED),1)
+
 run-mlp2:       ## Run the compiled 2-layer MLP on the FPGA and read back scores + prediction
 	$(MAKE) mlc
 	cd software && python3 send_kernel.py build/$(MODEL).hex \
