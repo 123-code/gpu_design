@@ -79,8 +79,12 @@ sim-mnist-jpp:  ## AI demo: the MNIST classifier written in J++ (mnist_fc.jpp) p
 
 # ---- ML compiler: model JSON -> data image + kernel, nothing baked in the bitstream ----
 MODEL ?= mlp_169_32_10
-mlc:            ## Compile a model: export -> graph_compiler -> asm -> hex. Usage: make mlc MODEL=mlp_169_32_10
-	cd software && python3 export_model.py models/$(MODEL).json
+IMAGE ?= 0
+TORCH_PY ?= $(HOME)/cnn_chip/venv/bin/python
+# per-model frontend; default is the torch-free random-weight exporter
+EXPORT_mnist_mlp = $(TORCH_PY) export_torch.py --image $(IMAGE)
+mlc:            ## Compile a model: export -> graph_compiler -> asm -> hex. Usage: make mlc MODEL=mnist_mlp IMAGE=3
+	cd software && $(or $(EXPORT_$(MODEL)),python3 export_model.py) models/$(MODEL).json
 	cd software && cargo run --quiet --bin graph_compiler -- models/$(MODEL).json
 	cd software && cargo run --quiet -- build/$(MODEL).asm build/$(MODEL).hex
 
