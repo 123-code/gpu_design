@@ -62,4 +62,9 @@ obj_vl/
 
 # ML compiler outputs (regenerate with `make mlc`)
 software/build/
-software/models/
+# NOT ignored: software/models/. Those were regenerable when they were seeded
+# random, but they now hold trained torch checkpoints + the quantized graphs
+# export_torch.py produces. A clone on a machine without torch would otherwise
+# get the compiler with nothing to compile. 120 KB total.
+sim_jpp_features
+sim_mnist_jpp_full
