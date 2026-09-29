@@ -40,7 +40,17 @@ impl Lexer {
                 ',' => { tokens.push(Token::Comma); self.position += 1; }
                 '+' => { tokens.push(Token::Plus); self.position += 1; }
                 '-' => { tokens.push(Token::Minus); self.position += 1; }
-                '<' => { tokens.push(Token::LessThan); self.position += 1; }
+                '*' => { tokens.push(Token::Star); self.position += 1; }
+                '<' => {
+                    if self.peek() == Some('<') {
+                        tokens.push(Token::ShiftLeft);
+                        self.position += 2;
+                    } else {
+                        tokens.push(Token::LessThan);
+                        self.position += 1;
+                    }
+                }
+                '>' if self.peek() == Some('>') => { tokens.push(Token::ShiftRight); self.position += 2; }
                 '=' => {
                     if self.peek() == Some('=') {
                         tokens.push(Token::Equal);
@@ -72,6 +82,8 @@ impl Lexer {
                             "fc_finalize" => tokens.push(Token::FcFinalize),
                             "fc_best" => tokens.push(Token::FcBest),
                             "advance" => tokens.push(Token::Advance),
+                            "wbase" => tokens.push(Token::Wbase),
+                            "if" => tokens.push(Token::If),
                             _ => tokens.push(Token::Ident(word)),
                         }
                     } else if ch.is_digit(10) {
@@ -102,12 +114,12 @@ impl Lexer {
         self.input[start..self.position].iter().collect()
     }
 
-    fn read_number(&mut self) -> Result<u8, String> {
+    fn read_number(&mut self) -> Result<u16, String> {
         let start = self.position;
         while self.position < self.input.len() && self.input[self.position].is_digit(10) {
             self.position += 1;
         }
         let num_str: String = self.input[start..self.position].iter().collect();
-        num_str.parse::<u8>().map_err(|_| format!("Number {} is too big for 8-bit (0-255 max)", num_str))
+        num_str.parse::<u16>().map_err(|_| format!("Number {} is too big for 16-bit (0-65535 max)", num_str))
     }
 }

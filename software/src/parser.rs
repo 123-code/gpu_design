@@ -24,7 +24,8 @@ impl Parser {
     }
 
 // Expressions are parsed in precedence levels, lowest binding first:
-//   parse_expression -> parse_comparison (< ==) -> parse_additive (+ -) -> parse_operand
+//   parse_expression -> parse_comparison (< ==) -> parse_shift (<< >>)
+//   -> parse_additive (+ -) -> parse_multiplicative (*) -> parse_operand
 // Each level LOOPS over its operators (left-associative) and calls the next level
 // down for each operand, so + binds tighter than < and a - b - c == (a - b) - c.
     fn parse_expression(&mut self) -> Result<Expr, String> {
@@ -33,10 +34,25 @@ impl Parser {
 
     // Lowest precedence: comparisons (<, ==)
     fn parse_comparison(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_additive()?;
+        let mut left = self.parse_shift()?;
         while let Some(op) = self.peek().and_then(|t| match t {
             Token::LessThan => Some(Op::LessThan),
             Token::Equal => Some(Op::Equal),
+            _ => None,
+        }) {
+            self.advance(); // consume the operator
+            let right = self.parse_shift()?;
+            left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    // Shifts (<<, >>): the shift amount is a value, like any other operand
+    fn parse_shift(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_additive()?;
+        while let Some(op) = self.peek().and_then(|t| match t {
+            Token::ShiftLeft => Some(Op::Shl),
+            Token::ShiftRight => Some(Op::Shr),
             _ => None,
         }) {
             self.advance(); // consume the operator
@@ -48,21 +64,38 @@ impl Parser {
 
     // Higher precedence: additive (+, -)
     fn parse_additive(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_operand()?;
+        let mut left = self.parse_multiplicative()?;
         while let Some(op) = self.peek().and_then(|t| match t {
             Token::Plus => Some(Op::Add),
             Token::Minus => Some(Op::Sub),
             _ => None,
         }) {
             self.advance(); // consume the operator
-            let right = self.parse_operand()?;
+            let right = self.parse_multiplicative()?;
             left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    // Highest binary precedence: multiplicative (*)
+    fn parse_multiplicative(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_operand()?;
+        while self.peek() == Some(&Token::Star) {
+            self.advance(); // consume '*'
+            let right = self.parse_operand()?;
+            left = Expr::BinaryOp { left: Box::new(left), op: Op::Mul, right: Box::new(right) };
         }
         Ok(left)
     }
 
     
     fn parse_operand(&mut self) -> Result<Expr, String> {
+        if self.peek() == Some(&Token::OpenParen) {
+            self.advance(); // consume '('
+            let inner = self.parse_expression()?;
+            self.consume(Token::CloseParen, "Expected ')' after expression")?;
+            return Ok(inner);
+        }
         match self.advance() {
             Some(Token::Num(val)) => Ok(Expr::Number(*val)),
             Some(Token::Ident(name)) => {
@@ -73,6 +106,14 @@ impl Parser {
                     "bid" => return Ok(Expr::ThreadId(IdentityReg::Bid)),
                     "bdim" => return Ok(Expr::ThreadId(IdentityReg::Bdim)),
                     _ => {}
+                }
+                if name == "max" && self.peek() == Some(&Token::OpenParen) {
+                    self.consume(Token::OpenParen, "Expected '(' after max")?;
+                    let a = self.parse_expression()?;
+                    self.consume(Token::Comma, "Expected ',' between max operands")?;
+                    let b = self.parse_expression()?;
+                    self.consume(Token::CloseParen, "Expected ')' after max operands")?;
+                    return Ok(Expr::Max(Box::new(a), Box::new(b)));
                 }
                 if name == "mem" && self.peek() == Some(&Token::OpenBracket) {
                     self.consume(Token::OpenBracket, "Expected '[' after mem")?;
@@ -100,11 +141,13 @@ fn parse_statement(&mut self) -> Result<Stmt, String> {
             Some(Token::Manifest) => self.parse_manifest(),
             Some(Token::Yeet) => self.parse_yeet(),
             Some(Token::GrindUntil) => self.parse_grind_until(),
+            Some(Token::If) => self.parse_if(),
             Some(Token::CrunchPush) => self.parse_crunch_push(), // NEW
             Some(Token::CrunchFire) => self.parse_crunch_fire(), // NEW
             Some(Token::FcReset)    => self.parse_nullary(Token::FcReset, Stmt::FcReset),
             Some(Token::FcFinalize) => self.parse_nullary(Token::FcFinalize, Stmt::FcFinalize),
-            Some(Token::Advance)    => self.parse_nullary(Token::Advance, Stmt::Advance),
+            Some(Token::Advance)    => self.parse_advance(),
+            Some(Token::Wbase)      => self.parse_wbase(),
             Some(Token::FcMac)      => self.parse_fc_mac(),
             Some(Token::FcBest)     => self.parse_fc_best(),
             _ => {
@@ -173,6 +216,21 @@ fn parse_statement(&mut self) -> Result<Stmt, String> {
         Ok(Stmt::JoseIgnacioLoop { condition, body })
     }
 
+    // if (<cond>) { body }
+    fn parse_if(&mut self) -> Result<Stmt, String> {
+        self.consume(Token::If, "Expected 'if'")?;
+        self.consume(Token::OpenParen, "Expected '(' before if condition")?;
+        let condition = self.parse_expression()?;
+        self.consume(Token::CloseParen, "Expected ')' after if condition")?;
+        self.consume(Token::OpenBrace, "Expected '{' to start if body")?;
+        let mut body = Vec::new();
+        while self.peek() != Some(&Token::CloseBrace) {
+            body.push(self.parse_statement()?);
+        }
+        self.consume(Token::CloseBrace, "Expected '}' to close if body")?;
+        Ok(Stmt::JoseIgnacioIf { condition, body })
+    }
+
    
 fn parse_manifest(&mut self) -> Result<Stmt, String> {
         self.consume(Token::Manifest, "Expected 'manifest'")?;
@@ -207,7 +265,7 @@ fn parse_manifest(&mut self) -> Result<Stmt, String> {
         Ok(Stmt::CrunchPush { pixel, weight })
     }
 
-    // Parses: crunch_fire <variable>;
+    // Parses: crunch_fire <variable>;  or  crunch_fire <variable>, <byte 0..3>;
     fn parse_crunch_fire(&mut self) -> Result<Stmt, String> {
         self.consume(Token::CrunchFire, "Expected 'crunch_fire'")?;
         
@@ -216,8 +274,17 @@ fn parse_manifest(&mut self) -> Result<Stmt, String> {
             _ => return Err("Expected destination variable name after crunch_fire".to_string()),
         };
         
+        let byte = if self.peek() == Some(&Token::Comma) {
+            self.advance(); // consume ','
+            match self.advance() {
+                Some(Token::Num(n)) if *n <= 3 => *n as u8,
+                _ => return Err("crunch_fire byte must be 0, 1, 2 or 3".to_string()),
+            }
+        } else {
+            0
+        };
         self.consume(Token::Semi, "Expected ';' after crunch_fire")?;
-        Ok(Stmt::CrunchFire { dest })
+        Ok(Stmt::CrunchFire { dest, byte })
     }
 
 
@@ -227,6 +294,28 @@ fn parse_manifest(&mut self) -> Result<Stmt, String> {
         self.consume(kw, "Expected keyword")?;
         self.consume(Token::Semi, "Expected ';'")?;
         Ok(stmt)
+    }
+
+    // advance;  or  advance <n>;
+    fn parse_advance(&mut self) -> Result<Stmt, String> {
+        self.consume(Token::Advance, "Expected 'advance'")?;
+        let n = match self.peek() {
+            Some(Token::Num(n)) => { let n = *n; self.advance(); n }
+            _ => 1,
+        };
+        self.consume(Token::Semi, "Expected ';' after advance")?;
+        Ok(Stmt::Advance(n))
+    }
+
+    // wbase <n>;
+    fn parse_wbase(&mut self) -> Result<Stmt, String> {
+        self.consume(Token::Wbase, "Expected 'wbase'")?;
+        let n = match self.advance() {
+            Some(Token::Num(n)) => *n,
+            _ => return Err("Expected a number after wbase".to_string()),
+        };
+        self.consume(Token::Semi, "Expected ';' after wbase")?;
+        Ok(Stmt::Wbase(n))
     }
 
     // fc_mac <feature>, <weight>;

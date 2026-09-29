@@ -1,0 +1,19 @@
+// jpp_features.jpp — hardware check for if / max / constants above 63.
+// Each thread reads its own id, so the threads DISAGREE on the branches inside
+// max() and the first if: the compiler's SYNC layout must still give every
+// thread its own answer. test/tb_jpp_features.sv checks warp 0's four threads.
+manifest t = tid;             // R0 = 0, 1, 2, 3
+manifest big = 200;           // R1 = 200            (needs LDI)
+manifest m = max(t, 2);       // R2 = 2, 2, 2, 3     (threads disagree)
+manifest r = 5;               // R3
+if (t < 2) {                  //                     (threads disagree)
+    r = big + 1;              // R3 = 201, 201, 5, 5
+}
+manifest after = 7;           // R4
+if (big < 5) {                // every thread skips
+    after = 99;
+}
+if (big == 200) {             // every thread enters
+    after = after + 1;        // R4 = 8
+}
+manifest wide = big + 100;    // R5 = 300            (ADD, not a truncated ADDI)

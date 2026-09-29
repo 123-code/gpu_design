@@ -3,7 +3,7 @@
 // protocol (same as tb_loadrun), instead of the stale tb_mnist harness.
 // Streams the J++-COMPILED classifier (mnist_fc.jpp -> mnist_fc_jpp.hex).
 module tb;
-    localparam PROG_WORDS = 41;          // software/mnist_fc_jpp.hex length
+    localparam PROG_WORDS = 36;          // software/mnist_fc_jpp.hex length
     localparam REAL_BYTES = 3380;        // fc_payload0.hex
     localparam DATA_BYTES = REAL_BYTES + 1; // +1 pad absorbs DMA final-byte drop
     localparam BIT_CYCLES = 16;

@@ -3,9 +3,26 @@
 // the assembler (src/main.rs) turns into .hex.
 //
 // Register plan: R0..R5 hold variables, R6/R7 are scratch for expression
-// temporaries (reset at the start of every statement). Comparisons set the
-// N/Z/P flags via CMP and only appear in loop conditions; arithmetic (+ - *)
-// appears in value expressions.
+// temporaries (reset at the start of every statement). A computed operand held
+// in a scratch register is dead once used, so each operation writes its result
+// back into one of its scratch operands; an assignment then retargets the last
+// instruction at the variable instead of copying. Comparisons set the N/Z/P
+// flags via CMP and only appear in loop/if conditions; arithmetic (+ - * << >>)
+// and max() appear in value expressions.
+//
+// Divergence: all threads of a warp share one PC, so a branch whose threads
+// disagree makes the scheduler run one side, then SYNC pops back to run the
+// other (scheduler.sv). `if` and `max` are laid out so the side that jumps
+// lands directly on a SYNC:
+//
+//     CMP ; BR<exit> Lskip ; <body> ; Lskip: SYNC
+//
+// Threads that disagree -> the jumping ones hit SYNC, which pops and runs the
+// body on the others; the body falls into the same SYNC, which (stack empty)
+// restores every thread. Threads that agree -> SYNC with an empty stack is a
+// no-op. A SYNC nested inside another if's body would restore threads the
+// outer if masked off, so if/max are rejected there. Loops emit no SYNC and
+// still assume every thread takes the same path.
 
 use crate::ast::{Stmt, Expr, Op, IdentityReg};
 use std::collections::HashMap;
@@ -13,14 +30,16 @@ use std::collections::HashMap;
 const MAX_VAR_REG: u8 = 5; // R0..R5 for variables
 const SCRATCH_BASE: u8 = 6; // R6, R7 for temporaries
 const UART_TX_ADDR: u8 = 63; // STR to offset 63 -> UART TX (lsu.sv)
+const IMM_MAX: u16 = 63;     // 6-bit immediate field
 
 pub struct Codegen {
     ast: Vec<Stmt>,
     pub assembly: Vec<String>,
     variables: HashMap<String, u8>,
     next_var_reg: u8,
-    next_scratch: u8,
+    scratch_used: u8, // bit 0 = R6 in use, bit 1 = R7 in use
     label_counter: usize,
+    if_depth: usize,
 }
 
 impl Codegen {
@@ -30,8 +49,9 @@ impl Codegen {
             assembly: Vec::new(),
             variables: HashMap::new(),
             next_var_reg: 0,
-            next_scratch: SCRATCH_BASE,
+            scratch_used: 0,
             label_counter: 1,
+            if_depth: 0,
         }
     }
 
@@ -53,14 +73,81 @@ impl Codegen {
         self.assembly.push(line.into());
     }
 
-    // Grab the next free scratch register (R6 then R7). Reset per statement.
-    fn scratch(&mut self) -> Result<u8, String> {
-        if self.next_scratch > 7 {
-            return Err("expression too complex (out of scratch registers R6/R7)".into());
+    // One MOV when the constant fits the 6-bit immediate, else the 3-word LDI.
+    fn load_const(&mut self, reg: u8, n: u16) {
+        if n <= IMM_MAX {
+            self.emit(format!("MOV R{}, #{}", reg, n));
+        } else {
+            self.emit(format!("LDI R{}, #{}", reg, n));
         }
-        let r = self.next_scratch;
-        self.next_scratch += 1;
-        Ok(r)
+    }
+
+    // ADDB / WBASE take a 6-bit immediate, so larger moves are split into steps of 63.
+    fn emit_base_move(&mut self, mnemonic: &str, mut n: u16) {
+        while n > IMM_MAX {
+            self.emit(format!("{} #{}", mnemonic, IMM_MAX));
+            n -= IMM_MAX;
+        }
+        if n > 0 {
+            self.emit(format!("{} #{}", mnemonic, n));
+        }
+    }
+
+    fn next_label(&mut self, prefix: &str) -> String {
+        let k = self.label_counter;
+        self.label_counter += 1;
+        format!("{}{}", prefix, k)
+    }
+
+    // If the last line wrote scratch register `from` as its destination, make it
+    // write `to` instead (the scratch value was only needed for the copy).
+    fn retarget_last(&mut self, from: u8, to: u8) -> bool {
+        const WRITES_RD: [&str; 12] = ["MOV", "LDI", "ADD", "ADDI", "SUB", "MUL", "SHR", "SHL", "LDR", "TID", "BID", "BDIM"];
+        if from < SCRATCH_BASE {
+            return false;
+        }
+        let Some(last) = self.assembly.last_mut() else { return false };
+        let Some((mnem, rest)) = last.split_once(' ') else { return false };
+        let rd = format!("R{}", from);
+        let rd_is_from = rest.split(',').next().map(str::trim) == Some(rd.as_str());
+        if !WRITES_RD.contains(&mnem) || !rd_is_from {
+            return false;
+        }
+        *last = format!("{} R{}{}", mnem, to, &rest[rd.len()..]);
+        true
+    }
+
+    // Result register for an operation: reuse a computed (scratch) operand, since
+    // it is dead after this instruction, else take a fresh scratch register.
+    fn result_reg(&mut self, lr: u8, rr: u8) -> Result<u8, String> {
+        if lr >= SCRATCH_BASE {
+            if rr != lr {
+                self.release(rr);
+            }
+            Ok(lr)
+        } else if rr >= SCRATCH_BASE {
+            Ok(rr)
+        } else {
+            self.scratch()
+        }
+    }
+
+    // Grab a free scratch register (R6 or R7). All are freed at each statement.
+    fn scratch(&mut self) -> Result<u8, String> {
+        for bit in 0..2 {
+            if self.scratch_used & (1 << bit) == 0 {
+                self.scratch_used |= 1 << bit;
+                return Ok(SCRATCH_BASE + bit);
+            }
+        }
+        Err("expression too complex (out of scratch registers R6/R7)".into())
+    }
+
+    // A scratch operand that has been consumed can be handed out again.
+    fn release(&mut self, r: u8) {
+        if r >= SCRATCH_BASE {
+            self.scratch_used &= !(1 << (r - SCRATCH_BASE));
+        }
     }
 
     fn var_reg(&self, name: &str) -> Result<u8, String> {
@@ -73,17 +160,19 @@ impl Codegen {
 
 
     fn gen_statement(&mut self, stmt: &Stmt) -> Result<(), String> {
-        self.next_scratch = SCRATCH_BASE; 
+        self.scratch_used = 0;
         match stmt {
             Stmt::JoseIgnacioVariable { name, value } => self.gen_manifest(name, value),
             Stmt::JoseIgnacioAssign { name, value } => self.gen_assign(name, value),
             Stmt::JoseIgnacioStore { address, value } => self.gen_store(address, value),
             Stmt::JoseIgnacioLoop { condition, body } => self.gen_grind_until(condition, body),
+            Stmt::JoseIgnacioIf { condition, body } => self.gen_if(condition, body),
             Stmt::JoseIgnacioYeet(value) => self.gen_yeet(value),
             Stmt::CrunchPush { pixel, weight } => self.gen_crunch_push(pixel, weight),
             Stmt::FcReset    => { self.emit("FRST"); Ok(()) }
             Stmt::FcFinalize => { self.emit("FARG"); Ok(()) }
-            Stmt::Advance    => { self.emit("ADDB #1"); Ok(()) }
+            Stmt::Advance(n) => { self.emit_base_move("ADDB", *n); Ok(()) }
+            Stmt::Wbase(n)   => { self.emit_base_move("WBASE", *n); Ok(()) }
             Stmt::FcMac { feature, weight } => {
                 let rf = self.gen_expr(feature)?;
                 let rw = self.gen_expr(weight)?;
@@ -95,7 +184,7 @@ impl Codegen {
                 self.emit(format!("FBEST R{}", rd));
                 Ok(())
             }       
-            Stmt::CrunchFire { dest } => self.gen_crunch_fire(dest),      
+            Stmt::CrunchFire { dest, byte } => self.gen_crunch_fire(dest, *byte),
         }
     }
 
@@ -122,14 +211,12 @@ impl Codegen {
         match value {
             // Common case: a literal goes straight in with one MOV.
             Expr::Number(n) => {
-                self.emit(format!("MOV R{}, #{}", dest, n));
+                self.load_const(dest, *n);
                 Ok(())
             }
             _ => {
                 let r = self.gen_expr(value)?;
-                if r != dest {
-                    // ponytail: reg->reg copy via ADDI #0; could fold dest into the
-                    // final op of gen_expr to drop this, if instruction count matters.
+                if r != dest && !self.retarget_last(r, dest) {
                     self.emit(format!("ADDI R{}, R{}, #0", dest, r));
                 }
                 Ok(())
@@ -160,9 +247,30 @@ impl Codegen {
         for stmt in body {
             self.gen_statement(stmt)?;
         }
-        self.next_scratch = SCRATCH_BASE; // back-edge is its own "statement"
+        self.scratch_used = 0; // back-edge is its own "statement"
         self.emit(format!("BR {}", l_cond));
         self.emit(format!("{}:", l_end));
+        Ok(())
+    }
+
+    // if (<cond>) { body }  -> CMP ; BR<exit> Lskip ; body ; Lskip: SYNC
+    // (layout explained at the top of the file)
+    fn gen_if(&mut self, condition: &Expr, body: &[Stmt]) -> Result<(), String> {
+        if self.if_depth > 0 {
+            return Err("'if' inside another 'if' is not supported (the inner SYNC would wake threads the outer if masked)".into());
+        }
+        let l_skip = self.next_label("Lskip");
+        let exit_branch = self.gen_condition(condition)?;
+        self.emit(format!("{} {}", exit_branch, l_skip));
+
+        self.if_depth += 1;
+        for stmt in body {
+            self.gen_statement(stmt)?;
+        }
+        self.if_depth -= 1;
+
+        self.emit(format!("{}:", l_skip));
+        self.emit("SYNC");
         Ok(())
     }
 
@@ -191,7 +299,7 @@ impl Codegen {
         match e {
             Expr::Number(n) => {
                 let r = self.scratch()?;
-                self.emit(format!("MOV R{}, #{}", r, n));
+                self.load_const(r, *n);
                 Ok(r)
             }
             Expr::Variable(name) => self.var_reg(name),
@@ -208,21 +316,51 @@ impl Codegen {
             Expr::BinaryOp { left, op, right } => {
                 let lr = self.gen_expr(left)?;
                 // ADD with an immediate right operand -> ADDI, no scratch for the constant.
-                if let (Op::Add, Expr::Number(n)) = (op, right.as_ref()) {
-                    let d = self.scratch()?;
+                if let (Op::Add, Expr::Number(n @ 0..=IMM_MAX)) = (op, right.as_ref()) {
+                    let d = if lr >= SCRATCH_BASE { lr } else { self.scratch()? };
                     self.emit(format!("ADDI R{}, R{}, #{}", d, lr, n));
                     return Ok(d);
                 }
                 let rr = self.gen_expr(right)?;
-                let d = self.scratch()?;
+                let d = self.result_reg(lr, rr)?;
                 let mnem = match op {
                     Op::Add => "ADD",
                     Op::Sub => "SUB",
+                    Op::Mul => "MUL",
+                    Op::Shr => "SHR",
+                    Op::Shl => "SHL",
                     Op::LessThan | Op::Equal => {
                         return Err("comparison cannot be used as a value (only in conditions)".into());
                     }
                 };
                 self.emit(format!("{} R{}, R{}, R{}", mnem, d, lr, rr));
+                Ok(d)
+            }
+            // max(a, b) -> ADDI d,a ; CMP b,a ; BRn Lmax ; ADDI d,b ; Lmax: SYNC
+            Expr::Max(a, b) => {
+                if self.if_depth > 0 {
+                    return Err("max() inside an 'if' is not supported (its SYNC would wake threads the if masked)".into());
+                }
+                let mut ra = self.gen_expr(a)?;
+                let mut rb = self.gen_expr(b)?;
+                // The result may overwrite `a` (it is copied first) but never `b`
+                // (still needed by the CMP), and never a live variable register.
+                if ra < SCRATCH_BASE && rb >= SCRATCH_BASE {
+                    std::mem::swap(&mut ra, &mut rb); // max is symmetric
+                }
+                let d = if ra >= SCRATCH_BASE { ra } else { self.scratch()? };
+                let l_max = self.next_label("Lmax");
+                if d != ra {
+                    self.emit(format!("ADDI R{}, R{}, #0", d, ra));
+                }
+                self.emit(format!("CMP R{}, R{}", rb, d));
+                self.emit(format!("BRn {}", l_max)); // b < a: keep a
+                self.emit(format!("ADDI R{}, R{}, #0", d, rb));
+                self.emit(format!("{}:", l_max));
+                self.emit("SYNC");
+                if rb != d {
+                    self.release(rb);
+                }
                 Ok(d)
             }
             Expr::MemoryAccess(index_expr) => {
@@ -252,10 +390,10 @@ impl Codegen {
         Ok(())
     }
 
-    // crunch_fire <variable>; -> emits MAC to save the result into the variable's register
-    fn gen_crunch_fire(&mut self, dest: &str) -> Result<(), String> {
+    // crunch_fire <variable> [, byte]; -> MAC writes byte 0..3 of the 32-bit result into the variable
+    fn gen_crunch_fire(&mut self, dest: &str, byte: u8) -> Result<(), String> {
         let r_dest = self.var_reg(dest)?;
-        self.emit(format!("MAC R{}", r_dest));
+        self.emit(format!("MAC R{}, #{}", r_dest, byte));
         Ok(())
     }
   

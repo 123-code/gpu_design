@@ -15,12 +15,17 @@ pub enum Token {
     FcMac,       // fc_mac a, b   -> FMAC
     FcFinalize,  // fc_finalize   -> FARG
     FcBest,      // fc_best x     -> FBEST
-    Advance,     // advance       -> ADDB #1
+    Advance,     // advance [n]   -> ADDB #n (default 1)
+    Wbase,       // wbase n       -> WBASE #n
+    If,          // if (cond) { } -> CMP + branch + SYNC
     Ident(String),
-    Num(u8), 
+    Num(u16),
     Assign,      
     Plus,        
     Minus,       
+    Star,        // *
+    ShiftRight,  // >>
+    ShiftLeft,   // <<
     LessThan,    
     Equal,       
     OpenParen,   

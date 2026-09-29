@@ -6,7 +6,7 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp
+.PHONY: mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp
 
 # Run any testbench under Verilator (the tool the job posting names) instead of
 # iverilog. Verilator is a stricter linter and much faster; --timing lets it
@@ -55,6 +55,25 @@ sim-divmerge:   ## Validate divergence + reconvergence (common code runs on all 
 	cd software && cargo run --quiet -- divmerge_kernel.asm divmerge_kernel.hex
 	$(IVERILOG) -g2012 -s tb -o sim_divmerge test/tb_divmerge.sv src/*.sv
 	$(VVP) sim_divmerge
+
+sim-mnist-jpp-full: ## The whole MNIST CNN in J++ (mnist.jpp), board config 1 warp x 9 threads: maps + prediction vs reference
+	cd software && cargo run --quiet --bin jpp -- mnist.jpp mnist_jpp.asm
+	cd software && cargo run --quiet -- mnist_jpp.asm mnist_jpp.hex
+	cd software && python3 run_mnist_jpp.py --sim 0
+	$(IVERILOG) -g2012 -s tb -o sim_mnist_jpp_full test/tb_mnist_jpp_full.sv src/*.sv
+	$(VVP) sim_mnist_jpp_full
+
+run-mnist-jpp:  ## Classify 50 test images on the FPGA with the J++ MNIST model (needs oss_build/tiny_gpu_ml.fs loaded)
+	cd software && cargo run --quiet --bin jpp -- mnist.jpp mnist_jpp.asm
+	cd software && cargo run --quiet -- mnist_jpp.asm mnist_jpp.hex
+	cd software && python3 run_mnist_jpp.py 50
+
+sim-jpp-features: ## J++ if / max / big constants on hardware, with threads taking different branches
+	cd software && cargo test --quiet --test jpp_features
+	cd software && cargo run --quiet --bin jpp -- jpp_features.jpp jpp_features.asm
+	cd software && cargo run --quiet -- jpp_features.asm jpp_features.hex
+	$(IVERILOG) -g2012 -s tb -o sim_jpp_features test/tb_jpp_features.sv src/*.sv
+	$(VVP) sim_jpp_features
 
 sim-warps:      ## Prove 2 warps run distinct global thread IDs (BLOCK_DIM=8 -> 8 lanes 0..7)
 	cd software && cargo run --quiet -- tid_demo.asm tid_demo.hex

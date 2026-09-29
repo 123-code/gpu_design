@@ -131,7 +131,16 @@ If you'd rather not hand-assemble, **J++** is a C-like language with its own com
 - `grind_until (cond) { … }` — loop, lowered to `CMP` + branch
 - `yeet expr` — emit a result byte (the memory-mapped UART store)
 - `tid` / `bid` / `bdim` — read this lane's SIMT identity (threadIdx / blockIdx / blockDim), so kernels can do per-lane work
-- `crunch_push` / `crunch_fire` — drive the MAC coprocessor from source
+- `crunch_push` / `crunch_fire x, n` — drive the MAC coprocessor from source; `n` picks byte 0–3 of the 32-bit result
+- `*`, `<<`, `>>` and parentheses — `MUL` / `SHL` / `SHR` on each thread's own ALU
+- `if (cond) { … }` — conditional; threads may disagree (lowered to `CMP` + branch + `SYNC`)
+- `max(a, b)` — larger of two values, also safe when threads disagree
+- `advance n` / `wbase n` — move the data-memory read / write position
+- numbers up to 65535 — anything above 63 is loaded with `LDI` instead of a truncated `MOV`
+
+`software/mnist.jpp` is the whole MNIST CNN (conv 3×3 → maxpool 2×2 → dense 169→10 → argmax) in 186 words of J++. Conv and max pool are split across threads with `tid` (each thread computes a different output pixel), so on the 9-thread bitstream the GPU run is 241k clock cycles instead of 1.04M; `make run-mnist-jpp` runs it on the board against the bit-exact reference.
+
+`if` and `max` can't be used inside another `if` body (the inner `SYNC` would wake threads the outer `if` masked). Loops don't emit `SYNC`, so a `grind_until` condition must still be the same on every thread.
 
 ```bash
 cd software
@@ -153,6 +162,8 @@ make sim-divmerge    # divergence + reconvergence — shared code resumes on all
 make sim-warps       # two warps run distinct global thread IDs (8 lanes, 0..7)
 make sim-mac32       # 32-bit MAC result reads back one byte at a time
 make sim-mlp         # parallel FC layer: 9 lanes each write their own neuron
+make sim-jpp-features # J++ if / max / big constants, threads taking different branches
+make sim-mnist-jpp-full # whole MNIST CNN in J++: conv map, pooled map and prediction vs reference
 ```
 
 These double as the specification: each one is the minimal proof that a specific SIMT feature (divergence, warp IDs, the MAC path) actually works.

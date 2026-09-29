@@ -1,0 +1,96 @@
+// mnist.jpp — the whole MNIST CNN in J++, run on the GPU:
+//   conv 3x3 (28x28 -> 26x26) -> maxpool 2x2 (-> 13x13) -> dense 169 -> 10 -> argmax
+// Bit-exact with mnist_ref.py.
+//
+// Data memory (the host streams everything marked "host"):
+//      0 ..  783   image 28x28                     host
+//    784 .. 1459   conv map 26x26                  GPU writes
+//   1460 .. 1628   pooled map 13x13                GPU writes
+//   1629 .. 1660   spare: absorbs writes from threads past the last pooled column
+//   1661 .. 3350   dense weights, 10 x 169 int8    host
+//
+// Conv and max pool are split across threads: each step, every thread takes the
+// output column x + tid, so a warp of N threads finishes N output pixels per step.
+// Threads that land past the right edge compute a throwaway value whose write lands
+// in a row (or the spare gap) that is overwritten later.
+//
+// The shared MAC only takes thread 0's operands, so the conv multiplies on each
+// thread's own ALU. A 9-tap sum reaches 291,465 but registers are 16 bits, so the
+// taps are summed in three groups that each stay below 65,536, and sum >> 8 is
+// rebuilt exactly from the groups' high and low bytes.
+//
+// The FC unit is also thread-0 driven, so the dense layer runs inside
+// `if (tid == 0)`: the other threads are masked off and stop issuing memory reads.
+
+manifest y = 0;
+manifest x = 0;
+manifest c = 0;
+manifest g1 = 0;
+manifest g2 = 0;
+manifest g3 = 0;
+
+// ---- conv 3x3: read base = image row y, write base = conv row y ----
+wbase 784;
+grind_until (y < 26) {
+    x = 0;
+    grind_until (x < 26) {
+        c = x + tid;                             // this thread's output column
+        g1 = mem[c + 56] * 127;                  // group sums: weights 127+127 = 254
+        g1 = g1 + mem[c + 57] * 127;
+        g2 = mem[c + 29] * 101;                  // 101+95+50 = 246
+        g2 = g2 + mem[c] * 95;
+        g2 = g2 + mem[c + 30] * 50;
+        g3 = mem[c + 58] * 70;                   // 70+68+27 = 165 (the 0 weight is skipped)
+        g3 = g3 + mem[c + 28] * 68;
+        g3 = g3 + mem[c + 1] * 27;
+        c = (g1 >> 8) + (g2 >> 8) + (g3 >> 8);   // sum of the high bytes
+        g1 = g1 + g2 + g3 - (c << 8);            // sum of the low bytes (exact mod 2^16)
+        c = c + (g1 >> 8);                       // = full sum >> 8
+        if (255 < c) {
+            c = 255;
+        }
+        mem[x + tid] = c;
+        x = x + bdim;
+    }
+    advance 28;
+    wbase 26;
+    y = y + 1;
+}
+
+// ---- maxpool 2x2, stride 2: read base = conv row 2y (784), write base = pooled row y (1460) ----
+advance 56;
+y = 0;
+grind_until (y < 13) {
+    x = 0;
+    grind_until (x < 13) {
+        c = x + tid;                             // this thread's pooled column
+        g1 = c + c;                              // left column of its 2x2 window
+        g2 = max(mem[g1], mem[g1 + 1]);
+        g2 = max(g2, mem[g1 + 26]);
+        g2 = max(g2, mem[g1 + 27]);
+        mem[c] = g2;
+        x = x + bdim;
+    }
+    advance 52;
+    wbase 13;
+    y = y + 1;
+}
+
+// ---- dense 169 -> 10 + argmax on thread 0; read base = pooled map (1460) ----
+if (tid == 0) {
+    fc_reset;
+    y = 0;                                       // digit
+    c = 201;                                     // dense weights: 169 + 32 spare bytes after the pooled map
+    grind_until (y < 10) {
+        x = 0;                                   // feature index
+        grind_until (x < 169) {
+            fc_mac mem[x], mem[c];
+            x = x + 1;
+            c = c + 1;
+        }
+        fc_finalize;                             // score = acc + bias[digit]; keep the best
+        y = y + 1;
+    }
+    fc_best y;
+    yeet y;                                      // send the predicted digit to the host
+}
