@@ -1,0 +1,92 @@
+// raycast.jpp — a Wolfenstein-style raycaster: one GPU thread per screen column.
+// The host (raycast.py) moves the player and paints the bytes this kernel emits.
+//
+// Data memory (every number mirrored in raycast.py):
+//      0 ..    1   px, 6.10 fixed point                          host, every frame
+//      2 ..    3   py + MAP*4: the map row offset rides in y     host, every frame
+//      4           pa, view angle in 1/256 turns                 host, every frame
+//      5           wave counter, host writes 0                   host, then GPU
+//     63           UART: never store here
+//     64 ..  127   results, packed per core as wave*bdim + tid   GPU writes
+//    128 ..  255   COLTAB: per-column ray angle offset           host
+//    256 ..  383   FISH: per-column 255*cos(offset)              host
+//    384 ..  639   HTAB: perpendicular distance -> half the wall host
+//                  height in pixels (0..240, 640x480 screen)
+//    640 .. 1237   TX: 128 + 127*cos(a), a in 1/512 turns        host
+//   1238 .. 1835   TY: 128 + 127*sin(a)                          host
+//   2048 .. 5903   map, 16 rows at stride 256: 1 = empty, 0 = wall
+//
+// Column = (4*bid + wave)*bdim + tid, 4 waves: core 0 renders the left half of
+// the screen, core 1 the right, so the reply arrives in column order and the
+// HDMI scanout (src/hdmi.sv) can read it straight off the UART.
+//
+// Each ray marches a fixed 168 steps of 127/1024 cell. Every thread runs every step (loop conditions must
+// agree across threads), so a ray that enters a wall freezes itself instead of
+// leaving the loop: the wall cell reads 0, which zeroes dx/dy and stops d
+// counting. The y offset makes ((y >> 10) << 8) + (x >> 10) the map byte's
+// address directly. The cell read is repeated three times: J++ has six
+// variable registers and the march already uses all of them.
+//
+// The wave counter lives in memory for the same reason. It is bumped early in
+// each wave and read again only after the march, so no read follows a recent
+// store (stores commit late).
+//
+// Only thread 0 can emit, so each thread stores its column's byte and thread 0
+// streams this core's 36: a length byte, then the bytes in wave/tid order.
+
+manifest x = 0;
+manifest y = 0;
+manifest dx = 0;
+manifest dy = 0;
+manifest d = 0;
+manifest s = 0;
+
+grind_until (mem[5] < 4) {
+    s = mem[5];
+    mem[5] = s + 1;
+    d = bid * 4;                                     // this thread's column
+    d = d + s;
+    d = d * bdim;
+    d = d + tid;
+    s = mem[4] + mem[4];                             // ray angle = 2*pa + COLTAB[col]
+    s = s + mem[d + 128];
+    dx = mem[s + 640];                               // step along the ray, signed
+    dx = dx - 128;
+    dy = mem[s + 1238];
+    dy = dy - 128;
+    x = mem[1];                                      // start at the player
+    x = x << 8;
+    x = x + mem[0];
+    y = mem[3];
+    y = y << 8;
+    y = y + mem[2];
+    d = 0;
+    s = 0;
+    grind_until (s < 168) {
+        dx = dx * mem[((y >> 10) << 8) + (x >> 10)];
+        dy = dy * mem[((y >> 10) << 8) + (x >> 10)];
+        d = d + mem[((y >> 10) << 8) + (x >> 10)];  // steps taken before the wall
+        x = x + dx;
+        y = y + dy;
+        s = s + 1;
+    }
+    s = mem[5] - 1;                                  // this wave again
+    s = s * bdim;
+    s = s + tid;                                     // result slot = column within this core
+    x = bid * 4;
+    x = x * bdim;
+    x = x + s;                                       // column again
+    y = d * mem[x + 256];                            // fisheye: perpendicular distance
+    y = y >> 8;
+    y = mem[y + 384];                                // -> half wall height
+    mem[s + 64] = y;
+}
+
+if (tid == 0) {
+    yeet 4 * bdim;
+    s = 0;
+    grind_until (s < 4 * bdim) {
+        yeet mem[s + 64];
+        s = s + 1;
+    }
+}

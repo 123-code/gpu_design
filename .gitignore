@@ -68,3 +68,5 @@ software/build/
 # get the compiler with nothing to compile. 120 KB total.
 sim_jpp_features
 sim_mnist_jpp_full
+sim_raycast
+sim_hdmi

@@ -32,3 +32,22 @@ IO_LOC  "led[4]" 19;
 IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
 IO_LOC  "led[5]" 20;
 IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// ---- HDMI (DVI 640x480): TMDS pairs, true LVDS (src/hdmi.sv) ----
+// Pins and IO type from apicula's examples/tangnano20k.cst (its DVI example).
+IO_LOC  "tmds_clk_p" 33;
+IO_PORT "tmds_clk_p" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_clk_n" 34;
+IO_PORT "tmds_clk_n" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_p[0]" 35;
+IO_PORT "tmds_d_p[0]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_n[0]" 36;
+IO_PORT "tmds_d_n[0]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_p[1]" 37;
+IO_PORT "tmds_d_p[1]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_n[1]" 38;
+IO_PORT "tmds_d_n[1]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_p[2]" 39;
+IO_PORT "tmds_d_p[2]" IO_TYPE=LVDS25 PULL_MODE=NONE;
+IO_LOC  "tmds_d_n[2]" 40;
+IO_PORT "tmds_d_n[2]" IO_TYPE=LVDS25 PULL_MODE=NONE;

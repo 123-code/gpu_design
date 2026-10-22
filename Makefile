@@ -6,7 +6,7 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp
+.PHONY: mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Run any testbench under Verilator (the tool the job posting names) instead of
 # iverilog. Verilator is a stricter linter and much faster; --timing lets it
@@ -67,6 +67,28 @@ run-mnist-jpp:  ## Classify 50 test images on the FPGA with the J++ MNIST model 
 	cd software && cargo run --quiet --bin jpp -- mnist.jpp mnist_jpp.asm
 	cd software && cargo run --quiet -- mnist_jpp.asm mnist_jpp.hex
 	cd software && python3 run_mnist_jpp.py 50
+
+sim-raycast:    ## Raycaster in J++ (raycast.jpp), board config 1 warp x 9 threads: two frames, every column vs reference
+	cd software && cargo run --quiet --bin jpp -- raycast.jpp raycast.asm
+	cd software && cargo run --quiet -- raycast.asm raycast.hex
+	cd software && python3 raycast.py --sim
+	$(IVERILOG) -g2012 -s tb -o sim_raycast test/tb_raycast.sv src/*.sv
+	$(VVP) sim_raycast
+
+sim-hdmi:       ## HDMI out (src/hdmi.sv): TMDS round trip, capture, scanout colours, 640x480 timing
+	$(IVERILOG) -g2012 -s tb -o sim_hdmi test/tb_hdmi.sv src/hdmi.sv
+	$(VVP) sim_hdmi
+
+build-oss-hdmi: ## Raycaster bitstream with HDMI: 2 cores x 1 warp x 9 lanes + 640x480 DVI out. Set OSS_CAD_SUITE first
+	FREQ=54 bash oss_build/build_cfg.sh 1 9 9 tiny_gpu_hdmi
+
+flash-oss-hdmi: ## Flash the HDMI raycaster bitstream into SRAM
+	openFPGALoader -b tangnano20k oss_build/tiny_gpu_hdmi.fs
+
+run-raycast:    ## Play the raycaster on the FPGA: w/s move, a/d turn, q quits (needs oss_build/tiny_gpu_hdmi.fs loaded)
+	cd software && cargo run --quiet --bin jpp -- raycast.jpp raycast.asm
+	cd software && cargo run --quiet -- raycast.asm raycast.hex
+	cd software && python3 raycast.py
 
 sim-jpp-features: ## J++ if / max / big constants on hardware, with threads taking different branches
 	cd software && cargo test --quiet --test jpp_features

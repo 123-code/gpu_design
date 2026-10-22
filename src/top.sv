@@ -38,7 +38,11 @@ module top #(
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
     output wire       uart_tx_out,   // to host         (PIN 69)
-    output wire [5:0] led            // leds to show result on them
+    output wire [5:0] led,           // leds to show result on them
+    output wire       tmds_clk_p,    // HDMI            (PINs 33-40)
+    output wire       tmds_clk_n,
+    output wire [2:0] tmds_d_p,
+    output wire [2:0] tmds_d_n
 );
     // ---- system clock: 27 MHz crystal pin -> 54 MHz via the rPLL ----
     // (gowin_pll is a transparent pass-through in simulation, so tbs drive sys_clk
@@ -186,6 +190,15 @@ module top #(
         .clk(sys_clk), .reset(sys_reset),
         .data_in(emit_data), .tx_start(tx_start),
         .tx_out(uart_tx_out), .tx_busy(uart_busy)
+    );
+
+    // ---- HDMI: the raycaster's columns (raycast.jpp), read off the UART reply ----
+    // 2 cores x 4 waves (raycast.jpp) x BLOCK_DIM threads = one byte per column.
+    hdmi_columns #(.COLS(8 * BLOCK_DIM)) u_hdmi (
+        .clk27(clk), .sys_clk(sys_clk),
+        .run_start(gpu_start), .byte_valid(tx_start), .byte_data(emit_data),
+        .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n),
+        .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n)
     );
 
     // ---- LEDs: loading status + done + low nibble of the result ----
