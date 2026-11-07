@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="-210 -10 900 900" font-family="Menlo,Consolas,monospace">
+  <rect x="-210" y="-10" width="900" height="900" fill="#0d0d0d"/>
+
+  <style>
+    .lbl   { fill:#dcdcdc; font-size:9px; }
+    .lblc  { fill:#dcdcdc; font-size:9px; text-anchor:middle; }
+    .sub   { fill:#8a8a8a; font-size:7.5px; text-anchor:middle; }
+    .wire  { stroke:#cfcfcf; stroke-width:1; fill:none; }
+    .wire2 { stroke:#9db7c9; stroke-width:1.2; fill:none; }
+    .mlbl  { fill:#eaeaea; font-size:13px; text-anchor:middle; font-weight:bold; }
+  </style>
+
+  <!-- ===== Input bar: pixel window ===== -->
+  <rect x="40" y="20" width="400" height="34" rx="3" fill="#b5651d" stroke="#e08a3c"/>
+  <text x="240" y="34" class="lblc" fill="#1a1a1a" font-weight="bold" font-size="9">3x3 pixel window — flat inputs px0..px8 (unsigned 8-bit)</text>
+  <text x="240" y="46" class="lblc" fill="#2a1a0a" font-size="7.5">pre-formed by software / DMA  —  NO line buffer</text>
+
+  <!-- ===== Green pixel registers 3x3 ===== -->
+  <!-- row 0 -->
+  <g>
+    <rect x="72"  y="76" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="100" y="102" class="lblc">px0</text>
+    <rect x="212" y="76" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="240" y="102" class="lblc">px1</text>
+    <rect x="352" y="76" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="380" y="102" class="lblc">px2</text>
+    <rect x="72"  y="132" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="100" y="158" class="lblc">px3</text>
+    <rect x="212" y="132" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="240" y="158" class="lblc">px4</text>
+    <rect x="352" y="132" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="380" y="158" class="lblc">px5</text>
+    <rect x="72"  y="188" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="100" y="214" class="lblc">px6</text>
+    <rect x="212" y="188" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="240" y="214" class="lblc">px7</text>
+    <rect x="352" y="188" width="56" height="44" fill="#123d24" stroke="#3ba05f"/><text x="380" y="214" class="lblc">px8</text>
+  </g>
+
+  <!-- ===== Weight note bar ===== -->
+  <rect x="40" y="248" width="400" height="24" rx="3" fill="#7a3f12" stroke="#c1772f"/>
+  <text x="240" y="264" class="lblc" fill="#f0d8bf" font-size="8.5">weights w0..w8 (signed 8-bit) — software-supplied, one per lane</text>
+
+  <!-- ===== Wires pixel -> multiplier ===== -->
+  <path class="wire" d="M100,232 V300 V330"/>
+  <path class="wire" d="M240,232 V300 V330"/>
+  <path class="wire" d="M380,232 V300 V330"/>
+  <!-- weight stubs into each multiplier (labelled) -->
+  <path class="wire2" d="M60,330 H82"/>  <text x="58" y="326" class="lbl" text-anchor="end">w0</text>
+  <path class="wire2" d="M200,330 H222"/><text x="198" y="326" class="lbl" text-anchor="end">w1</text>
+  <path class="wire2" d="M340,330 H362"/><text x="338" y="326" class="lbl" text-anchor="end">w2</text>
+  <path class="wire2" d="M60,410 H82"/>  <text x="58" y="406" class="lbl" text-anchor="end">w3</text>
+  <path class="wire2" d="M200,410 H222"/><text x="198" y="406" class="lbl" text-anchor="end">w4</text>
+  <path class="wire2" d="M340,410 H362"/><text x="338" y="406" class="lbl" text-anchor="end">w5</text>
+  <path class="wire2" d="M60,490 H82"/>  <text x="58" y="486" class="lbl" text-anchor="end">w6</text>
+  <path class="wire2" d="M200,490 H222"/><text x="198" y="486" class="lbl" text-anchor="end">w7</text>
+  <path class="wire2" d="M340,490 H362"/><text x="338" y="486" class="lbl" text-anchor="end">w8</text>
+  <!-- extra pixel drops to rows 2 and 3 of multipliers -->
+  <path class="wire" d="M100,330 V410"/><path class="wire" d="M100,410 V490"/>
+  <path class="wire" d="M240,330 V410"/><path class="wire" d="M240,410 V490"/>
+  <path class="wire" d="M380,330 V410"/><path class="wire" d="M380,410 V490"/>
+
+  <!-- ===== 9 multipliers (blue circles) ===== -->
+  <g>
+    <circle cx="100" cy="330" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="100" y="335" class="mlbl">×0</text>
+    <circle cx="240" cy="330" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="240" y="335" class="mlbl">×1</text>
+    <circle cx="380" cy="330" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="380" y="335" class="mlbl">×2</text>
+    <circle cx="100" cy="410" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="100" y="415" class="mlbl">×3</text>
+    <circle cx="240" cy="410" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="240" y="415" class="mlbl">×4</text>
+    <circle cx="380" cy="410" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="380" y="415" class="mlbl">×5</text>
+    <circle cx="100" cy="490" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="100" y="495" class="mlbl">×6</text>
+    <circle cx="240" cy="490" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="240" y="495" class="mlbl">×7</text>
+    <circle cx="380" cy="490" r="26" fill="#1b4a63" stroke="#3d7fa5"/><text x="380" y="495" class="mlbl">×8</text>
+  </g>
+  <text x="240" y="536" class="sub">nine products p0..p8  —  each 16-bit signed  (Stage 1, 1 clk)</text>
+
+  <!-- ===== Adder tree reduction ===== -->
+  <!-- column trunks down to a manifold -->
+  <path class="wire2" d="M100,516 V560"/>
+  <path class="wire2" d="M240,516 V560"/>
+  <path class="wire2" d="M380,516 V560"/>
+  <path class="wire2" d="M100,560 H380"/>
+  <path class="wire2" d="M240,560 V596"/>
+
+  <!-- adder-tree glyph -->
+  <rect x="150" y="596" width="180" height="40" rx="6" fill="#14384a" stroke="#3d7fa5"/>
+  <text x="240" y="614" class="lblc" fill="#eaeaea" font-size="11" font-weight="bold">Σ  adder tree</text>
+  <text x="240" y="628" class="sub" fill="#9db7c9">sign-extend to 32-bit, sum all 9  (Stage 2, comb)</text>
+
+  <!-- ===== single output ===== -->
+  <path class="wire2" d="M240,636 V684"/>
+  <circle cx="240" cy="710" r="30" fill="#1b4a63" stroke="#3d7fa5"/>
+  <text x="240" y="708" class="mlbl" font-size="11">result</text>
+  <text x="240" y="722" class="lblc" fill="#cfe0ea" font-size="8">_out</text>
+  <path class="wire2" d="M240,740 V782"/>
+  <path d="M235,776 L240,786 L245,776 Z" fill="#9db7c9"/>
+  <text x="240" y="804" class="sub" fill="#cfcfcf" font-size="9">ONE 32-bit signed MAC result per window</text>
+  <text x="240" y="818" class="sub">valid_out follows valid_in (2-clk latency)</text>
+
+  <!-- caption -->
+  <text x="240" y="854" class="lblc" fill="#7a7a7a" font-size="8">vector_mac.sv — 9 parallel multiplies, adder-tree reduction to a single output</text>
+</svg>

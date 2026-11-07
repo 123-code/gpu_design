@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="920" viewBox="0 0 1500 920" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <style>
+    .t  { fill:#1a1a1a; font-size:26px; font-weight:700; }
+    .h  { fill:#1a1a1a; font-size:17px; font-weight:700; }
+    .n  { fill:#1a1a1a; font-size:17px; font-weight:700; }
+    .colh{ fill:#555; font-size:12px; font-weight:700; }
+    .s  { fill:#1a1a1a; font-size:12px; }
+    .m  { fill:#1a1a1a; font-size:14px; font-family:SF Mono, Menlo, Consolas, monospace; font-weight:600; }
+    .cell { fill:#1a1a1a; font-size:13px; font-weight:700; }
+    .cellx{ fill:#888; font-size:12px; }
+    .badge{ fill:#fff; font-size:13px; font-weight:700; }
+    .w  { fill:#fff; }
+    .card{ stroke:#333; stroke-width:1.2; rx:3; ry:3; }
+    .stk { fill:#fff; stroke:#333; stroke-width:1; stroke-dasharray:4 3; rx:3; ry:3; }
+    .sep { stroke:#ddd; stroke-width:1; }
+    .white{fill:#fff;} .blue{fill:#9DC3E6;} .amber{fill:#D9A43C;} .brick{fill:#CE8B77;}
+    .teal{fill:#31708E;} .lgrn{fill:#A9D18E;} .on{fill:#70AD47;} .off{fill:#E6E6E6;}
+  </style>
+  <rect width="1500" height="920" fill="#fff"/>
+  <rect x="20" y="40" width="1460" height="860" rx="4" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text class="t" x="50" y="90">Branch divergence in one warp</text>
+  <line x1="50" y1="110" x2="1450" y2="110" stroke="#333" stroke-width="1"/>
+  <text class="h" x="50" y="150">program · divmerge_kernel.asm</text>
+  <rect class="card white" x="50" y="170" width="360" height="36"/>
+  <text class="m" x="64" y="193">0</text>
+  <text class="m" x="100" y="193">TID  R1</text>
+  <rect class="card white" x="50" y="212" width="360" height="36"/>
+  <text class="m" x="64" y="235">1</text>
+  <text class="m" x="100" y="235">MOV  R2, #2</text>
+  <rect class="card white" x="50" y="254" width="360" height="36"/>
+  <text class="m" x="64" y="277">2</text>
+  <text class="m" x="100" y="277">CMP  R1, R2</text>
+  <rect class="card amber" x="50" y="296" width="360" height="36"/>
+  <text class="m" x="64" y="319">3</text>
+  <text class="m" x="100" y="319">BRn  iftrue</text>
+  <circle cx="436" cy="314" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="436" y="319" text-anchor="middle">1</text>
+  <rect class="card blue" x="50" y="338" width="360" height="36"/>
+  <text class="m" x="64" y="361">4</text>
+  <text class="m" x="100" y="361">MOV  R3, #20</text>
+  <circle cx="436" cy="356" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="436" y="361" text-anchor="middle">4</text>
+  <rect class="card blue" x="50" y="380" width="360" height="36"/>
+  <text class="m" x="64" y="403">5</text>
+  <text class="m" x="100" y="403">SYNC</text>
+  <circle cx="436" cy="398" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="436" y="403" text-anchor="middle">5</text>
+  <rect class="card brick" x="50" y="422" width="360" height="36"/>
+  <text class="m" x="64" y="445">6</text>
+  <text class="m" x="100" y="445">MOV  R4, #7</text>
+  <circle cx="436" cy="440" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="436" y="445" text-anchor="middle">6</text>
+  <rect class="card brick" x="50" y="464" width="360" height="36"/>
+  <text class="m" x="64" y="487">7</text>
+  <text class="m" x="100" y="487">RET</text>
+  <circle cx="436" cy="482" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="436" y="487" text-anchor="middle">7</text>
+  <rect class="card lgrn" x="50" y="506" width="360" height="36"/>
+  <text class="m" x="64" y="529">8</text>
+  <text class="m" x="100" y="529">iftrue: MOV R3, #10</text>
+  <circle cx="436" cy="524" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="436" y="529" text-anchor="middle">2</text>
+  <rect class="card lgrn" x="50" y="548" width="360" height="36"/>
+  <text class="m" x="64" y="571">9</text>
+  <text class="m" x="100" y="571">SYNC</text>
+  <circle cx="436" cy="566" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="436" y="571" text-anchor="middle">3</text>
+  <rect class="card amber" x="50" y="610" width="22" height="20"/>
+  <text class="s" x="82" y="625">threads disagree</text>
+  <rect class="card lgrn" x="50" y="640" width="22" height="20"/>
+  <text class="s" x="82" y="655">jump side (runs 1st)</text>
+  <rect class="card blue" x="50" y="670" width="22" height="20"/>
+  <text class="s" x="82" y="685">stay side (runs 2nd)</text>
+  <rect class="card brick" x="50" y="700" width="22" height="20"/>
+  <text class="s" x="82" y="715">common code (all threads)</text>
+  <text class="s" x="50" y="755">numbers = execution order</text>
+  <text class="h" x="500" y="150">what the core does, step by step</text>
+  <text class="colh" x="545" y="180">instruction</text>
+  <text class="colh" x="800" y="180" text-anchor="middle">thread 0</text>
+  <text class="colh" x="878" y="180" text-anchor="middle">thread 1</text>
+  <text class="colh" x="956" y="180" text-anchor="middle">thread 2</text>
+  <text class="colh" x="1034" y="180" text-anchor="middle">thread 3</text>
+  <text class="colh" x="1090" y="180">stack</text>
+  <text class="colh" x="1240" y="180">what happens</text>
+  <circle cx="514" cy="232" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="514" y="237" text-anchor="middle">1</text>
+  <rect class="card amber" x="545" y="205" width="205" height="54"/>
+  <text class="m" x="557" y="237">@3  BRn iftrue</text>
+  <rect class="card on" x="765" y="205" width="70" height="54"/>
+  <text class="cell" x="800" y="237" text-anchor="middle">jump</text>
+  <rect class="card on" x="843" y="205" width="70" height="54"/>
+  <text class="cell" x="878" y="237" text-anchor="middle">jump</text>
+  <rect class="card on" x="921" y="205" width="70" height="54"/>
+  <text class="cell" x="956" y="237" text-anchor="middle">stay</text>
+  <rect class="card on" x="999" y="205" width="70" height="54"/>
+  <text class="cell" x="1034" y="237" text-anchor="middle">stay</text>
+  <rect class="stk" x="1090" y="205" width="135" height="54"/>
+  <text class="s" x="1100" y="227">push:</text>
+  <text class="s" x="1100" y="244">PC 4 · thr 2,3</text>
+  <text class="s" x="1240" y="223">threads disagree</text>
+  <text class="s" x="1240" y="240">save mask 1111</text>
+  <text class="s" x="1240" y="257">run jump side, PC → 8</text>
+  <line class="sep" x1="500" y1="272" x2="1450" y2="272"/>
+  <circle cx="514" cy="314" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="514" y="319" text-anchor="middle">2</text>
+  <rect class="card lgrn" x="545" y="287" width="205" height="54"/>
+  <text class="m" x="557" y="319">@8  MOV R3, #10</text>
+  <rect class="card on" x="765" y="287" width="70" height="54"/>
+  <text class="cell" x="800" y="319" text-anchor="middle">R3=10</text>
+  <rect class="card on" x="843" y="287" width="70" height="54"/>
+  <text class="cell" x="878" y="319" text-anchor="middle">R3=10</text>
+  <rect class="card off" x="921" y="287" width="70" height="54"/>
+  <text class="cellx" x="956" y="319" text-anchor="middle">masked</text>
+  <rect class="card off" x="999" y="287" width="70" height="54"/>
+  <text class="cellx" x="1034" y="319" text-anchor="middle">masked</text>
+  <rect class="stk" x="1090" y="287" width="135" height="54"/>
+  <text class="s" x="1100" y="309">PC 4 · thr 2,3</text>
+  <text class="s" x="1240" y="305">only threads 0,1 write</text>
+  <line class="sep" x1="500" y1="354" x2="1450" y2="354"/>
+  <circle cx="514" cy="396" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="514" y="401" text-anchor="middle">3</text>
+  <rect class="card lgrn" x="545" y="369" width="205" height="54"/>
+  <text class="m" x="557" y="401">@9  SYNC</text>
+  <rect class="card off" x="765" y="369" width="70" height="54"/>
+  <text class="cellx" x="800" y="401" text-anchor="middle">masked</text>
+  <rect class="card off" x="843" y="369" width="70" height="54"/>
+  <text class="cellx" x="878" y="401" text-anchor="middle">masked</text>
+  <rect class="card on" x="921" y="369" width="70" height="54"/>
+  <text class="cell" x="956" y="401" text-anchor="middle">wake</text>
+  <rect class="card on" x="999" y="369" width="70" height="54"/>
+  <text class="cell" x="1034" y="401" text-anchor="middle">wake</text>
+  <rect class="stk" x="1090" y="369" width="135" height="54"/>
+  <text class="s" x="1100" y="391">pop → empty</text>
+  <text class="s" x="1240" y="387">pop bookmark:</text>
+  <text class="s" x="1240" y="404">PC → 4, mask → 0011</text>
+  <line class="sep" x1="500" y1="436" x2="1450" y2="436"/>
+  <circle cx="514" cy="478" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="514" y="483" text-anchor="middle">4</text>
+  <rect class="card blue" x="545" y="451" width="205" height="54"/>
+  <text class="m" x="557" y="483">@4  MOV R3, #20</text>
+  <rect class="card off" x="765" y="451" width="70" height="54"/>
+  <text class="cellx" x="800" y="483" text-anchor="middle">masked</text>
+  <rect class="card off" x="843" y="451" width="70" height="54"/>
+  <text class="cellx" x="878" y="483" text-anchor="middle">masked</text>
+  <rect class="card on" x="921" y="451" width="70" height="54"/>
+  <text class="cell" x="956" y="483" text-anchor="middle">R3=20</text>
+  <rect class="card on" x="999" y="451" width="70" height="54"/>
+  <text class="cell" x="1034" y="483" text-anchor="middle">R3=20</text>
+  <rect class="stk" x="1090" y="451" width="135" height="54"/>
+  <text class="s" x="1100" y="473">empty</text>
+  <text class="s" x="1240" y="469">only threads 2,3 write</text>
+  <line class="sep" x1="500" y1="518" x2="1450" y2="518"/>
+  <circle cx="514" cy="560" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="514" y="565" text-anchor="middle">5</text>
+  <rect class="card blue" x="545" y="533" width="205" height="54"/>
+  <text class="m" x="557" y="565">@5  SYNC</text>
+  <rect class="card on" x="765" y="533" width="70" height="54"/>
+  <text class="cell" x="800" y="565" text-anchor="middle">wake</text>
+  <rect class="card on" x="843" y="533" width="70" height="54"/>
+  <text class="cell" x="878" y="565" text-anchor="middle">wake</text>
+  <rect class="card on" x="921" y="533" width="70" height="54"/>
+  <text class="cell" x="956" y="565" text-anchor="middle">—</text>
+  <rect class="card on" x="999" y="533" width="70" height="54"/>
+  <text class="cell" x="1034" y="565" text-anchor="middle">—</text>
+  <rect class="stk" x="1090" y="533" width="135" height="54"/>
+  <text class="s" x="1100" y="555">empty</text>
+  <text class="s" x="1240" y="551">stack empty:</text>
+  <text class="s" x="1240" y="568">restore mask 1111, PC → 6</text>
+  <line class="sep" x1="500" y1="600" x2="1450" y2="600"/>
+  <circle cx="514" cy="642" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="514" y="647" text-anchor="middle">6</text>
+  <rect class="card brick" x="545" y="615" width="205" height="54"/>
+  <text class="m" x="557" y="647">@6  MOV R4, #7</text>
+  <rect class="card on" x="765" y="615" width="70" height="54"/>
+  <text class="cell" x="800" y="647" text-anchor="middle">R4=7</text>
+  <rect class="card on" x="843" y="615" width="70" height="54"/>
+  <text class="cell" x="878" y="647" text-anchor="middle">R4=7</text>
+  <rect class="card on" x="921" y="615" width="70" height="54"/>
+  <text class="cell" x="956" y="647" text-anchor="middle">R4=7</text>
+  <rect class="card on" x="999" y="615" width="70" height="54"/>
+  <text class="cell" x="1034" y="647" text-anchor="middle">R4=7</text>
+  <rect class="stk" x="1090" y="615" width="135" height="54"/>
+  <text class="s" x="1100" y="637">empty</text>
+  <text class="s" x="1240" y="633">common code, all write</text>
+  <line class="sep" x1="500" y1="682" x2="1450" y2="682"/>
+  <circle cx="514" cy="724" r="13" fill="#1a1a1a"/>
+  <text class="badge" x="514" y="729" text-anchor="middle">7</text>
+  <rect class="card brick" x="545" y="697" width="205" height="54"/>
+  <text class="m" x="557" y="729">@7  RET</text>
+  <rect class="card on" x="765" y="697" width="70" height="54"/>
+  <text class="cell" x="800" y="729" text-anchor="middle">halt</text>
+  <rect class="card on" x="843" y="697" width="70" height="54"/>
+  <text class="cell" x="878" y="729" text-anchor="middle">halt</text>
+  <rect class="card on" x="921" y="697" width="70" height="54"/>
+  <text class="cell" x="956" y="729" text-anchor="middle">halt</text>
+  <rect class="card on" x="999" y="697" width="70" height="54"/>
+  <text class="cell" x="1034" y="729" text-anchor="middle">halt</text>
+  <rect class="stk" x="1090" y="697" width="135" height="54"/>
+  <text class="s" x="1100" y="719">empty</text>
+  <text class="s" x="1240" y="715">warp done</text>
+  <rect class="card on" x="765" y="780" width="22" height="20"/>
+  <text class="s" x="797" y="795">active: runs the instruction and writes</text>
+  <rect class="card off" x="1070" y="780" width="22" height="20"/>
+  <text class="s" x="1102" y="795">masked: sees the instruction, writes blocked</text>
+  <rect class="card teal" x="500" y="820" width="950" height="56"/>
+  <text class="n w" x="520" y="846">result:  R3 = [10, 10, 20, 20]   ·   R4 = [7, 7, 7, 7]</text>
+  <text class="s w" x="520" y="866">one PC for 4 threads · the two sides run one after the other · SYNC marks the end of each side</text>
+</svg>

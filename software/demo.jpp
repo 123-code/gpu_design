@@ -4,5 +4,8 @@
 
 manifest s = 0;
 manifest i = 0;
-s = 18+18;
+grind_until (i < 8) {
+    s = s + i;
+    i = i + 1;
+}
 yeet s;

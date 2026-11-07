@@ -1,0 +1,285 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1810" height="850" viewBox="0 0 1810 850" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <style>
+    .t   { fill:#1a1a1a; font-size:26px; font-weight:700; }
+    .hd  { fill:#1a1a1a; font-size:17px; font-weight:700; }
+    .sub { fill:#666; font-size:12px; }
+    .s   { fill:#1a1a1a; font-size:12px; }
+    .code{ fill:#1a1a1a; font-size:14px; font-family:SF Mono, Menlo, Consolas, monospace; }
+    .cmt { fill:#888; font-size:13px; font-family:SF Mono, Menlo, Consolas, monospace; }
+    .lbl { fill:#1a1a1a; font-size:14px; font-weight:700; font-family:SF Mono, Menlo, Consolas, monospace; }
+    .addr{ fill:#999; font-size:12px; font-family:SF Mono, Menlo, Consolas, monospace; }
+    .hex { fill:#1a1a1a; font-size:14px; font-weight:700; font-family:SF Mono, Menlo, Consolas, monospace; }
+    .note{ fill:#777; font-size:11px; }
+    .tok { stroke:#333; stroke-width:1; rx:3; ry:3; }
+    .kw{fill:#D9A43C;} .id{fill:#9DC3E6;} .num{fill:#A9D18E;} .sym{fill:#fff;}
+    .tokt{ fill:#1a1a1a; font-size:12px; font-family:SF Mono, Menlo, Consolas, monospace; }
+    .node{ fill:#fff; stroke:#333; stroke-width:1; rx:3; ry:3; }
+    .nodeb{ fill:#1a1a1a; font-size:12px; font-weight:700; }
+    .nodet{ fill:#1a1a1a; font-size:12px; }
+    .tree{ stroke:#888; stroke-width:1.2; fill:none; }
+    .wire{ stroke:#444; stroke-width:1.6; fill:none; marker-end:url(#a); }
+  </style>
+  <defs><marker id="a" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#444"/></marker></defs>
+  <rect width="1810" height="850" fill="#fff"/>
+  <rect x="20" y="30" width="1770" height="800" rx="4" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text class="t" x="40" y="80">From J++ to 16-bit instructions</text>
+  <text class="sub" x="40" y="102">real compiler output for a 7-line program (s = 0 + 1 + 2 + 3 = 6)</text>
+    <text class="hd" x="40" y="138">1 · J++ source</text>
+  <text class="sub" x="40" y="158">what you write</text>
+  <text class="hd" x="370" y="138">2 · tokens</text>
+  <text class="sub" x="370" y="158">lexer.rs</text>
+  <path class="wire" d="M334,132 L354,132"/>
+  <text class="hd" x="760" y="138">3 · syntax tree</text>
+  <text class="sub" x="760" y="158">parser.rs</text>
+  <path class="wire" d="M724,132 L744,132"/>
+  <text class="hd" x="1170" y="138">4 · assembly</text>
+  <text class="sub" x="1170" y="158">codegen.rs</text>
+  <path class="wire" d="M1134,132 L1154,132"/>
+  <text class="hd" x="1450" y="138">5 · machine code</text>
+  <text class="sub" x="1450" y="158">assembler · main.rs</text>
+  <path class="wire" d="M1414,132 L1434,132"/>
+  <line x1="40" y1="172" x2="1770" y2="172" stroke="#333"/>
+  <text class="code" x="40" y="215" xml:space="preserve">manifest s = 0;</text>
+  <text class="code" x="40" y="241" xml:space="preserve">manifest i = 0;</text>
+  <rect x="32" y="249" width="316" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="code" x="40" y="267" xml:space="preserve">grind_until (i &lt; 4) {</text>
+  <rect x="32" y="275" width="316" height="24" fill="#F6E3B8" rx="3"/>
+  <text class="code" x="40" y="293" xml:space="preserve">    s = s + i;</text>
+  <text class="code" x="40" y="319" xml:space="preserve">    i = i + 1;</text>
+  <rect x="32" y="327" width="316" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="code" x="40" y="345" xml:space="preserve">}</text>
+  <text class="code" x="40" y="371" xml:space="preserve">yeet s;</text>
+  <rect class="tok kw" x="370" y="200" width="74" height="20"/>
+  <text class="tokt" x="407.0" y="215" text-anchor="middle">manifest</text>
+  <rect class="tok id" x="450" y="200" width="21" height="20"/>
+  <text class="tokt" x="460.5" y="215" text-anchor="middle">s</text>
+  <rect class="tok sym" x="477" y="200" width="21" height="20"/>
+  <text class="tokt" x="487.5" y="215" text-anchor="middle">=</text>
+  <rect class="tok num" x="504" y="200" width="21" height="20"/>
+  <text class="tokt" x="514.5" y="215" text-anchor="middle">0</text>
+  <rect class="tok sym" x="531" y="200" width="21" height="20"/>
+  <text class="tokt" x="541.5" y="215" text-anchor="middle">;</text>
+  <rect class="tok kw" x="370" y="226" width="74" height="20"/>
+  <text class="tokt" x="407.0" y="241" text-anchor="middle">manifest</text>
+  <rect class="tok id" x="450" y="226" width="21" height="20"/>
+  <text class="tokt" x="460.5" y="241" text-anchor="middle">i</text>
+  <rect class="tok sym" x="477" y="226" width="21" height="20"/>
+  <text class="tokt" x="487.5" y="241" text-anchor="middle">=</text>
+  <rect class="tok num" x="504" y="226" width="21" height="20"/>
+  <text class="tokt" x="514.5" y="241" text-anchor="middle">0</text>
+  <rect class="tok sym" x="531" y="226" width="21" height="20"/>
+  <text class="tokt" x="541.5" y="241" text-anchor="middle">;</text>
+  <rect x="362" y="249" width="376" height="24" fill="#DCEBF7" rx="3"/>
+  <rect class="tok kw" x="370" y="252" width="97" height="20"/>
+  <text class="tokt" x="418.5" y="267" text-anchor="middle">grind_until</text>
+  <rect class="tok sym" x="473" y="252" width="21" height="20"/>
+  <text class="tokt" x="483.5" y="267" text-anchor="middle">(</text>
+  <rect class="tok id" x="500" y="252" width="21" height="20"/>
+  <text class="tokt" x="510.5" y="267" text-anchor="middle">i</text>
+  <rect class="tok sym" x="527" y="252" width="21" height="20"/>
+  <text class="tokt" x="537.5" y="267" text-anchor="middle">&lt;</text>
+  <rect class="tok num" x="554" y="252" width="21" height="20"/>
+  <text class="tokt" x="564.5" y="267" text-anchor="middle">4</text>
+  <rect class="tok sym" x="581" y="252" width="21" height="20"/>
+  <text class="tokt" x="591.5" y="267" text-anchor="middle">)</text>
+  <rect class="tok sym" x="608" y="252" width="21" height="20"/>
+  <text class="tokt" x="618.5" y="267" text-anchor="middle">{</text>
+  <rect x="362" y="275" width="376" height="24" fill="#F6E3B8" rx="3"/>
+  <rect class="tok id" x="370" y="278" width="21" height="20"/>
+  <text class="tokt" x="380.5" y="293" text-anchor="middle">s</text>
+  <rect class="tok sym" x="397" y="278" width="21" height="20"/>
+  <text class="tokt" x="407.5" y="293" text-anchor="middle">=</text>
+  <rect class="tok id" x="424" y="278" width="21" height="20"/>
+  <text class="tokt" x="434.5" y="293" text-anchor="middle">s</text>
+  <rect class="tok sym" x="451" y="278" width="21" height="20"/>
+  <text class="tokt" x="461.5" y="293" text-anchor="middle">+</text>
+  <rect class="tok id" x="478" y="278" width="21" height="20"/>
+  <text class="tokt" x="488.5" y="293" text-anchor="middle">i</text>
+  <rect class="tok sym" x="505" y="278" width="21" height="20"/>
+  <text class="tokt" x="515.5" y="293" text-anchor="middle">;</text>
+  <rect class="tok id" x="370" y="304" width="21" height="20"/>
+  <text class="tokt" x="380.5" y="319" text-anchor="middle">i</text>
+  <rect class="tok sym" x="397" y="304" width="21" height="20"/>
+  <text class="tokt" x="407.5" y="319" text-anchor="middle">=</text>
+  <rect class="tok id" x="424" y="304" width="21" height="20"/>
+  <text class="tokt" x="434.5" y="319" text-anchor="middle">i</text>
+  <rect class="tok sym" x="451" y="304" width="21" height="20"/>
+  <text class="tokt" x="461.5" y="319" text-anchor="middle">+</text>
+  <rect class="tok num" x="478" y="304" width="21" height="20"/>
+  <text class="tokt" x="488.5" y="319" text-anchor="middle">1</text>
+  <rect class="tok sym" x="505" y="304" width="21" height="20"/>
+  <text class="tokt" x="515.5" y="319" text-anchor="middle">;</text>
+  <rect x="362" y="327" width="376" height="24" fill="#DCEBF7" rx="3"/>
+  <rect class="tok sym" x="370" y="330" width="21" height="20"/>
+  <text class="tokt" x="380.5" y="345" text-anchor="middle">}</text>
+  <rect class="tok kw" x="370" y="356" width="44" height="20"/>
+  <text class="tokt" x="392.0" y="371" text-anchor="middle">yeet</text>
+  <rect class="tok id" x="420" y="356" width="21" height="20"/>
+  <text class="tokt" x="430.5" y="371" text-anchor="middle">s</text>
+  <rect class="tok sym" x="447" y="356" width="21" height="20"/>
+  <text class="tokt" x="457.5" y="371" text-anchor="middle">;</text>
+  <rect class="tok kw" x="370" y="405" width="16" height="14"/>
+  <text class="sub" x="392" y="417">keyword</text>
+  <rect class="tok id" x="458" y="405" width="16" height="14"/>
+  <text class="sub" x="480" y="417">name</text>
+  <rect class="tok num" x="546" y="405" width="16" height="14"/>
+  <text class="sub" x="568" y="417">number</text>
+  <rect class="tok sym" x="634" y="405" width="16" height="14"/>
+  <text class="sub" x="656" y="417">symbol</text>
+  <rect x="752" y="275" width="396" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="752" y="301" width="396" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="752" y="327" width="396" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="752" y="353" width="396" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="752" y="405" width="396" height="24" fill="#F6E3B8" rx="3"/>
+  <rect x="752" y="431" width="396" height="24" fill="#F6E3B8" rx="3"/>
+  <rect x="752" y="457" width="396" height="24" fill="#F6E3B8" rx="3"/>
+  <path class="tree" d="M770,220 L770,236 L788,236"/>
+  <path class="tree" d="M770,220 L770,262 L788,262"/>
+  <path class="tree" d="M770,220 L770,288 L788,288"/>
+  <path class="tree" d="M798,298 L798,314 L816,314"/>
+  <path class="tree" d="M826,324 L826,340 L844,340"/>
+  <path class="tree" d="M826,324 L826,366 L844,366"/>
+  <path class="tree" d="M798,298 L798,392 L816,392"/>
+  <path class="tree" d="M826,402 L826,418 L844,418"/>
+  <path class="tree" d="M854,428 L854,444 L872,444"/>
+  <path class="tree" d="M854,428 L854,470 L872,470"/>
+  <path class="tree" d="M826,402 L826,496 L844,496"/>
+  <path class="tree" d="M854,506 L854,522 L872,522"/>
+  <path class="tree" d="M854,506 L854,548 L872,548"/>
+  <path class="tree" d="M770,220 L770,574 L788,574"/>
+  <path class="tree" d="M798,584 L798,600 L816,600"/>
+  <rect class="node" x="760" y="200" width="66" height="20"/>
+  <text class="nodeb" x="768" y="215">program</text>
+  <rect class="node" x="788" y="226" width="116" height="20"/>
+  <text class="nodeb" x="796" y="241">manifest s = 0</text>
+  <rect class="node" x="788" y="252" width="116" height="20"/>
+  <text class="nodeb" x="796" y="267">manifest i = 0</text>
+  <rect class="node" x="788" y="278" width="95" height="20"/>
+  <text class="nodeb" x="796" y="293">grind_until</text>
+  <rect class="node" x="816" y="304" width="102" height="20"/>
+  <text class="nodeb" x="824" y="319">condition: &lt;</text>
+  <rect class="node" x="844" y="330" width="88" height="20"/>
+  <text class="nodet" x="852" y="345">Variable i</text>
+  <rect class="node" x="844" y="356" width="73" height="20"/>
+  <text class="nodet" x="852" y="371">Number 4</text>
+  <rect class="node" x="816" y="382" width="44" height="20"/>
+  <text class="nodeb" x="824" y="397">body</text>
+  <rect class="node" x="844" y="408" width="102" height="20"/>
+  <text class="nodeb" x="852" y="423">assign s = +</text>
+  <rect class="node" x="872" y="434" width="88" height="20"/>
+  <text class="nodet" x="880" y="449">Variable s</text>
+  <rect class="node" x="872" y="460" width="88" height="20"/>
+  <text class="nodet" x="880" y="475">Variable i</text>
+  <rect class="node" x="844" y="486" width="102" height="20"/>
+  <text class="nodeb" x="852" y="501">assign i = +</text>
+  <rect class="node" x="872" y="512" width="88" height="20"/>
+  <text class="nodet" x="880" y="527">Variable i</text>
+  <rect class="node" x="872" y="538" width="73" height="20"/>
+  <text class="nodet" x="880" y="553">Number 1</text>
+  <rect class="node" x="788" y="564" width="44" height="20"/>
+  <text class="nodeb" x="796" y="579">yeet</text>
+  <rect class="node" x="816" y="590" width="88" height="20"/>
+  <text class="nodet" x="824" y="605">Variable s</text>
+  <text class="cmt" x="1200" y="215" xml:space="preserve">// s -&gt; R0</text>
+  <text class="note" x="1450" y="215"></text>
+  <text class="addr" x="1188" y="241" text-anchor="end">0</text>
+  <text class="code" x="1200" y="241" xml:space="preserve">MOV R0, #0</text>
+  <text class="code" x="1450" y="241" xml:space="preserve">0010 000 000 000000</text>
+  <text class="hex" x="1638" y="241">2000</text>
+  <text class="cmt" x="1200" y="267" xml:space="preserve">// i -&gt; R1</text>
+  <text class="note" x="1450" y="267"></text>
+  <text class="addr" x="1188" y="293" text-anchor="end">1</text>
+  <text class="code" x="1200" y="293" xml:space="preserve">MOV R1, #0</text>
+  <text class="code" x="1450" y="293" xml:space="preserve">0010 001 000 000000</text>
+  <text class="hex" x="1638" y="293">2200</text>
+  <rect x="1162" y="301" width="266" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="1442" y="301" width="346" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="lbl" x="1200" y="319" xml:space="preserve">Lcond1:</text>
+  <text class="note" x="1450" y="319">no bits</text>
+  <rect x="1162" y="327" width="266" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="1442" y="327" width="346" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="addr" x="1188" y="345" text-anchor="end">2</text>
+  <text class="code" x="1200" y="345" xml:space="preserve">MOV R6, #4</text>
+  <text class="code" x="1450" y="345" xml:space="preserve">0010 110 000 000100</text>
+  <text class="hex" x="1638" y="345">2C04</text>
+  <rect x="1162" y="353" width="266" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="1442" y="353" width="346" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="addr" x="1188" y="371" text-anchor="end">3</text>
+  <text class="code" x="1200" y="371" xml:space="preserve">CMP R1, R6</text>
+  <text class="code" x="1450" y="371" xml:space="preserve">0011 000 001 000110</text>
+  <text class="hex" x="1638" y="371">3046</text>
+  <rect x="1162" y="379" width="266" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="1442" y="379" width="346" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="addr" x="1188" y="397" text-anchor="end">4</text>
+  <text class="code" x="1200" y="397" xml:space="preserve">BRzp Lend1</text>
+  <text class="code" x="1450" y="397" xml:space="preserve">1000 011 000 001010</text>
+  <text class="hex" x="1638" y="397">860A</text>
+  <text class="note" x="1686" y="397">Lend1 = 10</text>
+  <rect x="1162" y="405" width="266" height="24" fill="#F6E3B8" rx="3"/>
+  <rect x="1442" y="405" width="346" height="24" fill="#F6E3B8" rx="3"/>
+  <text class="addr" x="1188" y="423" text-anchor="end">5</text>
+  <text class="code" x="1200" y="423" xml:space="preserve">ADD R6, R0, R1</text>
+  <text class="code" x="1450" y="423" xml:space="preserve">0001 110 000 000001</text>
+  <text class="hex" x="1638" y="423">1C01</text>
+  <rect x="1162" y="431" width="266" height="24" fill="#F6E3B8" rx="3"/>
+  <rect x="1442" y="431" width="346" height="24" fill="#F6E3B8" rx="3"/>
+  <text class="addr" x="1188" y="449" text-anchor="end">6</text>
+  <text class="code" x="1200" y="449" xml:space="preserve">ADDI R0, R6, #0</text>
+  <text class="code" x="1450" y="449" xml:space="preserve">0101 000 110 000000</text>
+  <text class="hex" x="1638" y="449">5180</text>
+  <text class="addr" x="1188" y="475" text-anchor="end">7</text>
+  <text class="code" x="1200" y="475" xml:space="preserve">ADDI R6, R1, #1</text>
+  <text class="code" x="1450" y="475" xml:space="preserve">0101 110 001 000001</text>
+  <text class="hex" x="1638" y="475">5C41</text>
+  <text class="addr" x="1188" y="501" text-anchor="end">8</text>
+  <text class="code" x="1200" y="501" xml:space="preserve">ADDI R1, R6, #0</text>
+  <text class="code" x="1450" y="501" xml:space="preserve">0101 001 110 000000</text>
+  <text class="hex" x="1638" y="501">5380</text>
+  <rect x="1162" y="509" width="266" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="1442" y="509" width="346" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="addr" x="1188" y="527" text-anchor="end">9</text>
+  <text class="code" x="1200" y="527" xml:space="preserve">BR Lcond1</text>
+  <text class="code" x="1450" y="527" xml:space="preserve">1000 111 000 000010</text>
+  <text class="hex" x="1638" y="527">8E02</text>
+  <text class="note" x="1686" y="527">Lcond1 = 2</text>
+  <rect x="1162" y="535" width="266" height="24" fill="#DCEBF7" rx="3"/>
+  <rect x="1442" y="535" width="346" height="24" fill="#DCEBF7" rx="3"/>
+  <text class="lbl" x="1200" y="553" xml:space="preserve">Lend1:</text>
+  <text class="note" x="1450" y="553">no bits</text>
+  <text class="addr" x="1188" y="579" text-anchor="end">10</text>
+  <text class="code" x="1200" y="579" xml:space="preserve">MOV R6, #63</text>
+  <text class="code" x="1450" y="579" xml:space="preserve">0010 110 000 111111</text>
+  <text class="hex" x="1638" y="579">2C3F</text>
+  <text class="addr" x="1188" y="605" text-anchor="end">11</text>
+  <text class="code" x="1200" y="605" xml:space="preserve">STR R0, [R6]</text>
+  <text class="code" x="1450" y="605" xml:space="preserve">1011 000 110 000000</text>
+  <text class="hex" x="1638" y="605">B180</text>
+  <text class="addr" x="1188" y="631" text-anchor="end">12</text>
+  <text class="code" x="1200" y="631" xml:space="preserve">RET</text>
+  <text class="code" x="1450" y="631" xml:space="preserve">1111 000 000 000000</text>
+  <text class="hex" x="1638" y="631">F000</text>
+  <text class="addr" x="1188" y="657" text-anchor="end">13</text>
+  <text class="code" x="1200" y="657" xml:space="preserve">RET</text>
+  <text class="code" x="1450" y="657" xml:space="preserve">1111 000 000 000000</text>
+  <text class="hex" x="1638" y="657">F000</text>
+  <line x1="40" y1="672" x2="1770" y2="672" stroke="#ddd"/>
+  <text class="s" x="40" y="700">What you write: two variables, a loop that runs</text>
+  <text class="s" x="40" y="717">while i &lt; 4, and yeet to send the result back.</text>
+  <text class="s" x="370" y="700">The lexer cuts the text into words it recognizes:</text>
+  <text class="s" x="370" y="717">keywords, names, numbers and symbols. Spaces are thrown</text>
+  <text class="s" x="370" y="734">away.</text>
+  <text class="s" x="760" y="700">The parser arranges the words into a tree that shows what is</text>
+  <text class="s" x="760" y="717">inside what: the loop owns its condition and its body.</text>
+  <text class="s" x="1170" y="700">Codegen walks the tree and writes</text>
+  <text class="s" x="1170" y="717">instructions. s gets R0, i gets R1, R6</text>
+  <text class="s" x="1170" y="734">holds temporary values. The loop</text>
+  <text class="s" x="1170" y="751">becomes CMP + branches to labels.</text>
+  <text class="s" x="1450" y="700">The assembler turns each instruction into 16 bits.</text>
+  <text class="s" x="1450" y="717">Labels and comments get no address; branches get the</text>
+  <text class="s" x="1450" y="734">label's address. The 2nd RET works around the loader</text>
+  <text class="s" x="1450" y="751">dropping the last word.</text>
+  <rect x="40" y="790" width="18" height="14" fill="#DCEBF7" stroke="#999"/>
+  <text class="s" x="66" y="802">the loop, followed through every stage</text>
+  <rect x="330" y="790" width="18" height="14" fill="#F6E3B8" stroke="#999"/>
+  <text class="s" x="356" y="802">s = s + i, followed through every stage</text>
+</svg>

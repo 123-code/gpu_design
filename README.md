@@ -1,250 +1,282 @@
-# FPGA GPU
+# tiny-gpu
 
-A small SIMT GPU running on a Tang Nano 20K FPGA, programmable in its own language, **J++**.
+A 16-bit SIMT GPU, built from scratch, running on a $30 FPGA.
 
-This project helped me learn how AI models run under the hood.
+Two compute cores. A warp scheduler that hides memory latency. A divergence stack so threads can take different branches and meet again. A language, J++, and a Rust compiler that lowers it onto the ISA. The board is a [Tang Nano 20K](https://wiki.sipeed.com/hardware/en/tang/tang-nano-20k/nano-20k.html). The clock is 81 MHz, from the 27 MHz crystal through an on-chip PLL. A handwritten digit goes in over UART. The chip sends the class back.
 
-## What is it
+I built it to learn how a GPU actually works, by making a small one I could hold and imitating an Nvidia GPU as closely as a $30 part allows.
 
-A small SIMT GPU: two compute cores, each with its own warp scheduler, per-lane ALUs, LSU, register files, and a program counter, executing one 16-bit instruction across many threads in lockstep.
+- 16-bit ISA and assembler
+- J++, a small language, and its compiler
+- Branch divergence and warp scheduling
+- 2 compute cores
+- MNIST inference at 81 MHz
 
-- **Runs on real hardware.** The full toolchain — synthesis, place-and-route, timing closure, bitstream flashing — is set up for the Tang Nano 20K.
-- **Two independent cores** run in parallel, each with its own program and data memory.
-- **Real SIMT features:** multi-warp scheduling for latency hiding, a divergence stack for branch divergence, and programmable thread/block IDs.
-- **Host-driven accelerator harness:** a UART receiver feeds a DMA engine that streams program and data into on-chip memory, launches a run, and streams the result back — all with no CPU on the board; the computer acts as the host.
-- **Its own programming language:** J++, a small C-like language with a compiler written in Rust, so you can write high-level kernels and stream them into the FPGA without hand-assembling 16-bit opcodes.
+The long version is [I Built a Custom AI GPU on a $25 FPGA](https://joseignacio.vercel.app/custom-ai-gpu). The thread this page follows is [on X](https://x.com/JoseIgnacioNar5/status/2075357471267234046).
 
-## Demo
+The hardware is a descendant of Adam Majmudar's [tiny-gpu](https://github.com/adam-maj/tiny-gpu). The same kind of project, for a TPU, is Surya Sure's [tiny-tpu](https://github.com/tiny-tpu-v2/tiny-tpu). The board's first life was a fixed CNN, [cnn_chip](https://github.com/123-code/cnn_chip): a serial dot product turned into a parallel MAC array, INT8 weights, the whole MNIST forward pass on the chip.
 
-Write a kernel in J++, and one command compiles it, streams it to the FPGA over UART, runs it on both cores, and prints what the kernel emits back:
+## See it run
+
+The two recordings from the thread. Each one plays here. Click it for the original file.
+
+<p align="center">
+  <a href="docs/videos/mnist-inference.mp4">
+    <img src="docs/videos/mnist-inference.gif" width="360" alt="A Tang Nano 20K on a desk classifies a handwritten 5 drawn in the browser.">
+  </a>
+</p>
+
+<p align="center">
+  <b>MNIST.</b> Draw a digit. The board on the desk classifies it.<br>
+  <a href="docs/videos/mnist-inference.mp4">docs/videos/mnist-inference.mp4</a>
+</p>
+
+<p align="center">
+  <a href="docs/videos/jpp-kernel.mp4">
+    <img src="docs/videos/jpp-kernel.gif" width="820" alt="A J++ loop compiles, streams to the FPGA, and both cores return 28.">
+  </a>
+</p>
+
+<p align="center">
+  <b>J++.</b> Sum <code>0..7</code>. Both cores reply <code>28</code> (<code>0x1C</code>).<br>
+  <a href="docs/videos/jpp-kernel.mp4">docs/videos/jpp-kernel.mp4</a>
+</p>
+
+That second clip is one command. It compiles the kernel, assembles it, streams the binary over UART, runs it on both cores, and prints what they send back.
 
 ```bash
 make run-jpp JPP=software/demo.jpp READ=2
 ```
 
-`software/demo.jpp` sums `0..7` on the GPU and `yeet`s the result — each core replies with `28` (`0x1C`).
+```jpp
+// software/demo.jpp
+manifest s = 0;
+manifest i = 0;
+grind_until (i < 8) {
+    s = s + i;
+    i = i + 1;
+}
+yeet s;
+```
 
-![J++ running on the FPGA](docs/demo.gif)
+`make demo` serves the draw-a-digit page from the first clip at <http://localhost:8000>. `make run-mnist-jpp` classifies 50 MNIST test images on the board and checks them against the bit-exact reference. Both need a bitstream already loaded. The open-source flow below builds one.
 
-> Regenerate the GIF (board plugged in, [VHS](https://github.com/charmbracelet/vhs) installed): `vhs demo/demo.tape`
+The same language also drives a Wolfenstein-style raycaster, scanned out over HDMI: `make sim-raycast`, and `make run-raycast` once `oss_build/tiny_gpu_hdmi.fs` is on the board.
 
-## Architecture
+## The machine
 
-[![Full architecture](docs/gpu_overview.svg)](docs/gpu_overview.svg)
+[![Host, DMA, dispatcher, and two SIMT cores](docs/gpu_overview.svg)](docs/gpu_overview.svg)
 
-The design has three layers: a host that loads and launches work, the GPU that dispatches it across cores, and the cores that execute it as SIMT threads.
+Three layers. A host loads the work. A dispatcher hands it out. Two cores execute it as SIMT threads.
 
-### Top level (`top.sv`)
+The board has no CPU. A UART receiver feeds a DMA engine, which reads a small header (program size, data size) and writes the kernel and its data into on-chip memory. When the payload is in, the DMA pulses `gpu_start`. An arming FSM holds the GPU in reset for a few cycles, then lets it run once. Bytes the kernel emits are arbitrated back onto the UART transmitter and mirrored on the LEDs. The computer is the host.
 
-The board runs as a host-driven accelerator with no CPU of its own. A UART receiver feeds a DMA engine that parses a small header (program size, data size) and streams the kernel and its data into on-chip memory. When the payload is fully loaded, the DMA pulses `gpu_start`; an arming FSM holds the GPU in reset for a few cycles to settle, then releases it for exactly one run. Results the kernel emits are arbitrated back onto the UART transmitter and mirrored to the LEDs. Everything runs on a single clock derived from the 27 MHz crystal by an rPLL (27 × 3 = 81 MHz).
+The dispatcher is one-shot. It gives block 0 to core 0 and block 1 to core 1, then waits until both report done. The number of cores is the number of blocks.
 
-### GPU (`gpu.sv`, `dispatcher.sv`)
+Each core has its own copy of the program ROM and its own data memory. The two program counters never share a BRAM port, so the cores run at the same time, each on its own instruction stream. A UART arbiter owns the one cable back to the host: core 0 sends its bytes, then core 1 sends.
 
-The GPU holds two compute cores and a dispatcher. The dispatcher is one-shot: it hands block 0 to core 0 and block 1 to core 1, then waits for both to report done. There is no re-dispatch loop — the number of cores is the number of blocks — which keeps launch control trivial for a fixed-size machine.
+[![One SIMT core: scheduler, four lanes, vector MAC, FC MAC](docs/core_detail.svg)](docs/core_detail.svg)
 
-Each core has its own copy of the program ROM and its own data memory. The cores run independent program counters, so they can't share a single BRAM read port; duplicating the small ROM is cheaper than arbitrating one. This is what lets the two cores run genuinely in parallel rather than in lockstep with each other.
+A core is one warp scheduler in front of shared execution hardware.
 
-### Inside a core (`core.sv`, `scheduler.sv`)
+- **Scheduler.** Owns the pipeline. With more than one warp, it picks who drives the pipeline each pass. A warp stalled on memory is `WARP_WAITING`. A warp that can run is `WARP_READY`. A warp that has halted is `WARP_DONE`.
+- **Fetch and decode.** Read the 16-bit instruction at the current warp's PC and turn it into register addresses, an immediate, an ALU op, and the memory and branch flags.
+- **Lanes.** Every thread in the warp has its own ALU, load/store unit, and register file, so one instruction operates on many threads' data. Three registers are read-only identity: thread id, block id, block size. That is how one kernel does different work per lane.
 
-[![One SIMT compute core](docs/core_detail.svg)](docs/core_detail.svg)
-
-A core is a single warp scheduler driving shared execution resources:
-
-- **Scheduler** — owns the pipeline state machine and, with multiple warps enabled, picks which warp drives the pipeline each pass. Warps that stall on memory are parked (`WARP_WAITING`) while a ready warp runs, hiding load latency.
-- **Fetcher / Decoder** — fetch the 16-bit instruction at the current warp's PC and decode it into control signals (register addresses, immediate, ALU op, memory-op and branch flags).
-- **Per-lane datapath** — every thread in a warp has its own ALU, LSU, and register file, so one instruction operates on many threads' data at once (the SIMD/SIMT pattern). The register file includes read-only registers holding this thread's block and thread ID, which is how a single kernel does different work per lane.
-
-### The SIMT pipeline
-
-Each instruction walks a nine-state pipeline:
+Every instruction walks the same nine states. `SELECT_WARP` runs after every instruction, which is where a stalled warp gets swapped out.
 
 ```
 IDLE → SELECT_WARP → FETCH → DECODE → REQUEST → WAIT → EXECUTE → UPDATE → DONE
 ```
 
-`REQUEST`/`WAIT` exist for memory operations. `SELECT_WARP` is where latency hiding happens: between instructions the scheduler can switch to another warp. `DONE` is terminal.
+`REQUEST` and `WAIT` are the memory ops. `DONE` is the end of a warp.
 
 ### Branch divergence
 
-In a SIMT architecture all threads run an instruction in lockstep — but what if you write `if (x > 0)` and only half the threads meet the condition? The hardware is forced to march together, so we handle this with active masking and a hardware divergence stack.
+[![One warp splitting on a branch, then meeting again at SYNC](docs/divergence.svg)](docs/divergence.svg)
 
-- **The mask (divergence):** when a warp hits a divergent branch, the hardware computes an active mask (e.g. `[1, 1, 0, 0]`). All threads physically execute the instructions inside the `if` block, but the threads that failed the condition (the `0`s) have their register and memory write-enables disabled. They act as "ghosts" — doing the work but leaving no trace.
-- **Reconvergence:** when the branch begins, the core pushes a bookmark onto a small internal hardware stack. The bookmark holds the original mask (before the split) and the reconvergence PC (the address where the branch ends). Every instruction, the PC compares the current active mask against the reconvergence point on top of the stack. The moment they match, the `if` block is complete and the mask is restored.
+Threads in a warp share one program counter, so `if (x > 0)` cannot send them two ways in the same cycle. The warp carries an active mask. Four threads start as `1111`. A bit of `1` means that lane's result is written. A bit of `0` means the lane still executes, and its register and memory writes are dropped.
 
-### Memory architecture & arbitration
+When the lanes disagree on a branch, the scheduler pushes a bookmark: the PC to come back to, and the mask of the lanes that did not take the branch. It then runs the taken side. `SYNC` pops the bookmark and runs the other side under the saved mask. A `SYNC` on an empty stack restores the mask from before the split, and the warp continues together. J++ `if` lowers to `CMP`, a branch, and these `SYNC`s.
 
-Data and program memory are physically separate (a strict Harvard architecture), so each core can fetch an instruction and read/write data in the same clock cycle without contention.
+### Memory
 
-- **Sizing:** program memory is 16 bits wide, mapping one assembly opcode per row. Data memory is 8 bits wide; this fork widens the address bus from the original 8-bit (256 bytes) to a 13-bit address space (8 KB).
-- **The arbiter:** because this is a SIMT machine, a single `LDR` means multiple threads request memory at the same moment — but the on-chip memory has a single port. The core includes a hardware arbiter that freezes the threads, serializes the requests one by one through the single port across consecutive cycles, then wakes the warp to resume lockstep execution once all data has arrived.
+Program memory and data memory are separate, so a core can fetch an instruction and touch data in the same cycle. Program memory is 16 bits wide, one instruction per row. Data memory is 8 bits wide. The address bus is 13 bits, 8 KB, widened from the 8-bit space this design started from.
 
-## Instruction Set Architecture (16-bit)
+A single `LDR` is one instruction and many lanes, and the data RAM has one read port. The load/store arbiter freezes the warp, walks the lanes through that port one cycle at a time, then wakes the warp. Stores go through a second arbiter. Thread 0 is the lane that drives the shared MAC and the UART emit.
 
-Every instruction is a 16-bit word, decoded as: `[15:12]` opcode · `[11:9]` rd · `[8:6]` rs · `[5:0]` imm (register `rt` in `[2:0]`).
+## How it got here
 
-| Opcode | Mnemonic | Meaning / Operation |
+### A CNN, then a question
+
+The Tang Nano arrived as a way to learn hardware from software. The first thing that ran on it was [cnn_chip](https://github.com/123-code/cnn_chip): MNIST, INT8, a MAC array instead of a serial dot product, weights and activations on the chip. Once that classified a digit, the next question was whether the same part could be a GPU, with a program counter, threads, and a language, instead of a network baked into the wiring.
+
+### Four threads
+
+The first GPU was one core and four threads, programmed in assembly. The kernel was a multiply. The point of that version was a warp that fetched, decoded, and executed, and a result that came back on the UART.
+
+### A MAC array
+
+[![Nine multipliers into an adder tree, one 32-bit result](docs/mac_array_actual.svg)](docs/mac_array_actual.svg)
+
+Matrix multiplies needed something faster than a loop of `MUL`s. Two instructions talk to the array. `MACL` pushes an operand pair from the core into the unit's register buffers. `MAC` dots those buffers. The sum is 32 bits, and the core reads it back one byte at a time.
+
+The nine products are registered, then a combinational adder tree reduces them, then the 32-bit sum is registered on the way out. The register in front of the tree is there because the multiply-and-add path did not meet timing as one combinational cloud. `vector_mac` is a 3×3 window: nine unsigned pixels, nine signed weights, one signed 32-bit result, valid two cycles after valid-in.
+
+### A second core, and warps that hide latency
+
+The next machine has two cores. The dispatcher, the private memory, and the UART arbiter are what make them actually parallel. A shared program ROM would have serialized them on one read port.
+
+A load takes several cycles, and a core that sits on that load is wasting the ALUs. After every instruction the scheduler returns to `SELECT_WARP`, looks at every warp, and picks the next one in `WARP_READY`. Warp A can be waiting on memory while warp B multiplies.
+
+### A language
+
+[![A seven-line J++ program, followed from source to tokens, tree, assembly, and 16-bit words](docs/jpp_pipeline.svg)](docs/jpp_pipeline.svg)
+
+Assembly was enough to prove the core. It was the wrong way to write a convolution. J++ is a small C-like language, and the compiler is a Rust crate in `software/src` with the usual four stages.
+
+The lexer cuts the text into tokens (`manifest`, a name, a number, an operator). The parser walks that list with a cursor. Each keyword has a parse function, and a statement that consumes what it expects becomes a `Stmt` in the abstract syntax tree. A token in the wrong place is a syntax error. Codegen walks the tree and emits assembly: a variable is a register, a loop is `CMP` and a branch, `yeet` is a store to the memory-mapped UART. The assembler looks up the opcode, packs the register fields and the immediate into a 16-bit word, and writes a `.hex` file. That file is what the DMA streams onto the FPGA.
+
+```
+.jpp  →  .asm  →  .hex  →  UART  →  GPU
+```
+
+### Kernels on the chip
+
+`software/mnist.jpp` is the whole MNIST CNN in J++: a 3×3 convolution (28×28 to 26×26), a 2×2 max pool (to 13×13), a dense layer 169→10, then argmax. It compiles to 186 instructions. Convolution and pooling are split across lanes with `tid`, so on the 9-thread bitstream the run is 241k cycles, down from 1.04M when the same work is one pixel at a time. `make sim-mnist-jpp-full` checks the conv map, the pooled map, and the prediction against `software/mnist_ref.py`.
+
+## Instruction set
+
+Every instruction is 16 bits. `[15:12]` is the opcode, `[11:9]` is `rd`, `[8:6]` is `rs`, `[5:0]` is the immediate. The third register, `rt`, lives in `[2:0]`.
+
+| Opcode | Mnemonic | What it does |
 | --- | --- | --- |
-| `0000` | `FRST`/`FMAC`<br>`FARG`/`FBEST` | **FC-MAC coprocessor** (sub-fn in `[5:4]`): reset / `acc += rs*rt` / finalize digit (add int32 bias, latch logit score) / read logit LSB. |
-| `0001` | `ADD rd,rs,rt` | rd = rs + rt |
-| `0010` | `MOV rd,#imm` | rd = imm (6-bit immediate) |
-| `0010` | `TID`/`BID`<br>`BDIM rd` | `MOV` with `rs`≠0: rd = threadIdx (R15) / blockIdx (R13) / blockDim (R14) |
-| `0011` | `CMP rs,rt` | set N/Z/P flags (Negative, Zero, Positive) |
-| `0100` | `LDR rd,[rs]` | rd = mem[rbase + rs] (load from memory) |
-| `0101` | `ADDI rd,rs,#imm` | rd = rs + imm |
-| `0110` | `MACL rs` | push an operand pair into the 8-lane vector MAC buffer |
-| `0111` | `MAC rd,#n` | fire the vector MAC → slice byte `#n` (0–3) of the 32-bit sum into rd |
-| `1000` | `BRn target` | branch if N (8-bit target, pushes mask to stack on divergence) |
-| `1001` | `ADDB #imm` / `WBASE #imm` | advance read base / write base (`[11]` selects) |
-| `1010` | `MUL rd,rs,rt` | rd = rs · rt |
-| `1011` | `STR rt,[rs]` | mem[wbase + rs] = rt (store to memory; `rs`==63 → UART TX) |
-| `1100`/`1101`/`1110` | `SHR`/`SHL`/`SUB` | shift right / shift left / subtract |
-| `1111` | `RET` | halt thread |
-| `1111` | `SYNC` | pop the reconvergence stack, swap active thread mask (`[0]`=1) |
-| _(pseudo)_ | `MAX rd,ra,rb` | assembler-expanded macro (`CMP` + `BRn` + `ADDI`) |
+| `0000` | `FRST` / `FMAC` / `FARG` / `FBEST` | FC-MAC coprocessor, sub-function in `[5:4]`. Reset. `acc += rs*rt`. Finalize a digit (add the int32 bias, latch the logit). Read the logit LSB. |
+| `0001` | `ADD rd, rs, rt` | `rd = rs + rt` |
+| `0010` | `MOV rd, #imm` | `rd = imm`, a 6-bit immediate |
+| `0010` | `TID` / `BID` / `BDIM rd` | `MOV` with `rs` nonzero. `rd` becomes threadIdx (R15), blockIdx (R13), or blockDim (R14). |
+| `0011` | `CMP rs, rt` | Set N, Z, P. Negative, zero, positive. |
+| `0100` | `LDR rd, [rs]` | `rd = mem[rbase + rs]` |
+| `0101` | `ADDI rd, rs, #imm` | `rd = rs + imm` |
+| `0110` | `MACL rs` | Push an operand pair into the vector MAC buffer. |
+| `0111` | `MAC rd, #n` | Fire the vector MAC. Byte `n` of the 32-bit sum lands in `rd`. |
+| `1000` | `BRn target` | Branch if N. 8-bit target. On divergence, push the mask. |
+| `1001` | `ADDB #imm` / `WBASE #imm` | Advance the read base, or the write base. Bit `[11]` selects. |
+| `1010` | `MUL rd, rs, rt` | `rd = rs · rt` |
+| `1011` | `STR rt, [rs]` | `mem[wbase + rs] = rt`. `rs == 63` is the UART transmit. |
+| `1100` / `1101` / `1110` | `SHR` / `SHL` / `SUB` | Shift right, shift left, subtract. |
+| `1111` | `RET` | Halt the warp. |
+| `1111` | `SYNC` | Pop the divergence stack and swap in the saved mask. Bit `[0]` set. |
+| pseudo | `MAX rd, ra, rb` | `CMP`, `BRn`, `ADDI`. The assembler expands it. |
 
-> **Note on registers:** only **R0–R7** are instruction-addressable (3-bit fields). R13–R15 are SIMT identity registers, readable via `TID`/`BID`/`BDIM` (which copy them into an R0–R7 register).
+R0–R7 are the registers an instruction can name. The fields are 3 bits. R13, R14, and R15 are the SIMT identity registers, copied into R0–R7 by `BID`, `BDIM`, and `TID`.
 
-This is a substantial expansion over upstream tiny-gpu's 11 instructions. The additions (MAC/FC coprocessor ops, shift ops, base-pointer registers, `SYNC`) let real dot-product and vector workloads run without exploding the instruction count. Several are encoded to avoid burning opcodes: `WBASE` is `ADDB` with bit 11 set, and `SYNC` is `RET` with bit 0 set — the decoder routes them differently, no new opcode needed.
+`WBASE` is `ADDB` with bit 11 set, and `SYNC` is `RET` with bit 0 set. The decoder splits them, so the ISA grew without spending a new opcode. Upstream tiny-gpu had 11 instructions. The MAC and FC ops, the shifts, the base pointers, and `SYNC` are what let a dot product and a divergent `if` fit in a program this small.
 
-## Toolchain
+## J++
 
-Two ways to write kernels — both in `software/` (one Rust crate).
+The compiler is `software/src`: `lexer.rs`, `parser.rs`, `codegen.rs`, and the assembler in `main.rs`.
 
-### Assembler
+| You write | The hardware does |
+| --- | --- |
+| `manifest x = …` | A variable. Register-allocated. |
+| `grind_until (cond) { … }` | A loop. `CMP` and a branch. |
+| `yeet expr` | Emit a byte. Store to the UART address. |
+| `tid` / `bid` / `bdim` | This lane's thread, block, and block size. |
+| `crunch_push` / `crunch_fire x, n` | `MACL`, then `MAC`. `n` picks byte 0–3 of the 32-bit sum. |
+| `*`, `<<`, `>>`, parentheses | `MUL`, `SHL`, `SHR` on each lane's ALU. |
+| `if (cond) { … }` | `CMP`, a branch, `SYNC`. Lanes may disagree. |
+| `max(a, b)` | The larger value. Safe when lanes disagree. |
+| `advance n` / `wbase n` | Move the data-memory read base or write base. |
+| a number above 63 | `LDI`. The assembler builds the full 16-bit constant, up to 65535. |
 
-`software/src/main.rs` turns `.asm` into the 16-bit machine words the DMA streams up. It's a direct mnemonic-to-opcode encoder with a few conveniences:
-
-- **Overloaded `ADD`** — a `#`-prefixed third operand auto-selects `ADDI`.
-- **Pseudo-ops** that expand to real instructions: `WBASE`, `SYNC`, `MAX`.
-- **Labels** for branch targets, resolved to 8-bit addresses.
-
-```bash
-cd software
-cargo run -- program.asm        # -> program.hex
-```
-
-### J++ — a small language
-
-If you'd rather not hand-assemble, **J++** is a C-like language with its own compiler (lexer → parser → codegen, all in `software/src/`). It lowers high-level control flow straight to tiny-gpu assembly:
-
-- `manifest x = …` — declare a variable (register-allocated)
-- `grind_until (cond) { … }` — loop, lowered to `CMP` + branch
-- `yeet expr` — emit a result byte (the memory-mapped UART store)
-- `tid` / `bid` / `bdim` — read this lane's SIMT identity (threadIdx / blockIdx / blockDim), so kernels can do per-lane work
-- `crunch_push` / `crunch_fire x, n` — drive the MAC coprocessor from source; `n` picks byte 0–3 of the 32-bit result
-- `*`, `<<`, `>>` and parentheses — `MUL` / `SHL` / `SHR` on each thread's own ALU
-- `if (cond) { … }` — conditional; threads may disagree (lowered to `CMP` + branch + `SYNC`)
-- `max(a, b)` — larger of two values, also safe when threads disagree
-- `advance n` / `wbase n` — move the data-memory read / write position
-- numbers up to 65535 — anything above 63 is loaded with `LDI` instead of a truncated `MOV`
-
-`software/mnist.jpp` is the whole MNIST CNN (conv 3×3 → maxpool 2×2 → dense 169→10 → argmax) in 186 words of J++. Conv and max pool are split across threads with `tid` (each thread computes a different output pixel), so on the 9-thread bitstream the GPU run is 241k clock cycles instead of 1.04M; `make run-mnist-jpp` runs it on the board against the bit-exact reference.
-
-`if` and `max` can't be used inside another `if` body (the inner `SYNC` would wake threads the outer `if` masked). Loops don't emit `SYNC`, so a `grind_until` condition must still be the same on every thread.
+Two limits come straight from the stack. An `if` or a `max` inside another `if` body would emit a `SYNC` that wakes lanes the outer `if` had masked, so the compiler rejects it. A `grind_until` does not emit `SYNC`, so the loop condition has to be the same on every lane.
 
 ```bash
 cd software
-cargo run --bin jpp -- program.jpp program.asm   # J++ -> asm
-cargo run -- program.asm                          # asm -> hex
+cargo run --bin jpp -- program.jpp program.asm
+cargo run -- program.asm
 ```
 
-So the full path from source to silicon is: **`.jpp` → `.asm` → `.hex` → UART → GPU.**
+## Simulate
 
-## Simulation
-
-You don't need the board to run or verify anything — the whole design simulates under Icarus Verilog, and each target is **self-checking** (it asserts the expected result and fails loudly if the hardware is wrong). No cocotb, no Python glue for the core sims — just `iverilog` + `vvp`.
+Icarus Verilog. Every target checks its own result and fails if the hardware is wrong.
 
 ```bash
-make sim             # smoke test: kernel computes 5 * 3 = 15
-make sim-loadrun     # full path: stream a kernel + data over UART, run, check the reply
-make sim-divergence  # per-lane SIMT divergence — lanes take different branches
-make sim-divmerge    # divergence + reconvergence — shared code resumes on all lanes
-make sim-warps       # two warps run distinct global thread IDs (8 lanes, 0..7)
-make sim-mac32       # 32-bit MAC result reads back one byte at a time
-make sim-mlp         # parallel FC layer: 9 lanes each write their own neuron
-make sim-jpp-features # J++ if / max / big constants, threads taking different branches
-make sim-mnist-jpp-full # whole MNIST CNN in J++: conv map, pooled map and prediction vs reference
+make sim                # 5 * 3 = 15
+make sim-loadrun        # stream a kernel and its data over UART, run, check the reply
+make sim-divergence     # lanes take different branches
+make sim-divmerge       # they meet again, and the shared code runs on every lane
+make sim-warps          # two warps, eight lanes, thread ids 0..7
+make sim-mac32          # the 32-bit MAC sum comes back one byte at a time
+make sim-mlp            # nine lanes, nine neurons, each lane writes its own
+make sim-jpp-features   # if, max, and constants above 63, with lanes that disagree
+make sim-mnist-jpp-full # the whole CNN: conv map, pooled map, prediction
+make sim-raycast        # two raycaster frames, every column against the reference
 ```
 
-These double as the specification: each one is the minimal proof that a specific SIMT feature (divergence, warp IDs, the MAC path) actually works.
+Each one is the smallest proof that one piece of the machine works: divergence, warp ids, the MAC path, the compiler.
 
-## Build & flash
+## Build and flash
 
-Two synthesis paths, both targeting the Tang Nano 20K (Gowin GW2AR-18).
-
-### Open-source toolchain (recommended)
-
-Yosys + nextpnr-himbaechel + apicula. **This is the validated path** — the vendor's `GowinSynthesis` segfaults on the multi-warp design, so the open-source flow is what actually produces working bitstreams here.
+Both flows target the Tang Nano 20K, a Gowin GW2AR-18. The open-source flow is the one that produces the bitstreams this repo runs. Gowin's `GowinSynthesis` segfaults on the multi-warp design.
 
 ```bash
-export OSS_CAD_SUITE=/path/to/oss-cad-suite   # from YosysHQ/oss-cad-suite-build
-make build-oss        # -> oss_build/tiny_gpu_oss.fs
-make flash-oss        # load into SRAM (volatile)
+export OSS_CAD_SUITE=/path/to/oss-cad-suite   # YosysHQ/oss-cad-suite-build
+make build-oss        # oss_build/tiny_gpu_oss.fs
+make flash-oss        # SRAM. Gone on power cycle.
 ```
 
-For the largest AI-capable configuration (2 cores × 1 warp × 9 lanes = 18 ALU lanes, ~78% LUT, 140 MHz):
+The largest configuration used for inference is 2 cores × 1 warp × 9 lanes, 18 ALU lanes, about 78% of the LUTs, timing closed around 140 MHz.
 
 ```bash
-make build-oss-max    # -> oss_build/tiny_gpu_max18.fs
+make build-oss-max    # oss_build/tiny_gpu_max18.fs
 make flash-oss-max
 ```
 
-### Vendor toolchain
-
-The Gowin flow is still wired up (`build_fpga.sh` / `flash.sh`) for single-warp configs:
+The vendor flow is still wired for the single-warp configuration.
 
 ```bash
-make build            # -> impl/pnr/tiny_gpu.fs
-make flash            # SRAM (volatile)
-make flash-persist    # write to SPI flash (survives power-cycle)
+make build            # impl/pnr/tiny_gpu.fs
+make flash            # SRAM
+make flash-persist    # SPI flash, boots on its own
 ```
 
-`flash` loads into SRAM and is gone on power-cycle — good for iterating. `flash-persist` burns the external SPI flash so the design boots on its own.
-
-### End to end
-
-Once a bitstream is on the board, the whole `.jpp → asm → hex → UART → GPU → result` pipeline is one command:
+With a bitstream loaded, source to result is the command from the clip.
 
 ```bash
 make run-jpp JPP=software/your_kernel.jpp READ=8
 ```
 
-That compiles your J++ source, assembles it, streams it to the FPGA, runs it, and prints the bytes the kernel emits back.
+You need Rust (`cargo`) for the assembler and the compiler, Icarus Verilog (`iverilog`, `vvp`) to simulate, [oss-cad-suite](https://github.com/YosysHQ/oss-cad-suite-build) (Yosys, nextpnr-himbaechel, apicula, openFPGALoader) to synthesize and flash, and Python 3 for `software/send_kernel.py`.
 
-### Prerequisites
+## Silicon
 
-- **Rust** (`cargo`) — assembler + J++ compiler
-- **Icarus Verilog** (`iverilog`, `vvp`) — simulation
-- **oss-cad-suite** (Yosys, nextpnr-himbaechel, apicula, openFPGALoader) — synthesis + flashing
-- **Python 3** — the UART host scripts (`send_kernel.py`)
+Vendor place-and-route for the smaller configuration, from `impl/pnr/tiny_gpu.rpt.html`.
 
-## Synthesis & utilization (Tang Nano 20K · GW2AR-18C)
+| Resource | Used | Available | |
+| --- | --- | --- | --- |
+| Logic | 1501 (1052 LUT4, 449 ALU) | 20736 | 8% |
+| Registers | 878 | 15750 | 6% |
+| Slices | 1180 | 10368 | 12% |
+| Block SRAM | 4 SDPB + 1 pROM | 46 | 11% |
+| DSP | 4× MULT9X9 + 5× MULTADDALU18X18 | | |
+| I/O | 9 | 66 | 14% |
 
-From `impl/pnr/tiny_gpu.rpt.html`:
+The design is clocked at 81 MHz, the 27 MHz crystal multiplied by 3. The 18-lane configuration closes timing around 140 MHz and uses about 78% of the LUTs.
 
-| Resource        | Used                            | Available | Util. |
-| --------------- | ------------------------------- | --------- | ----- |
-| Logic (LUT+ALU) | 1501 (1052 LUT4, 449 ALU)       | 20736     | 8 %   |
-| Registers       | 878 (877 FF + 1 I/O)            | 15750     | 6 %   |
-| CLS (slices)    | 1180                            | 10368     | 12 %  |
-| Block SRAM      | 4 SDPB + 1 pROM                 | 46        | 11 %  |
-| DSP             | 4× MULT9X9 + 5× MULTADDALU18X18 | —         | 25 %  |
-| I/O ports       | 9                               | 66        | 14 %  |
-| PLL             | 0                               | 2         | 0 %   |
-
-Clocked at **81 MHz** (rPLL, 27 × 3). The 18-lane max configuration closes timing around 140 MHz.
-
-## Repo layout
+## Repository
 
 ```
-src/        gpu, core, scheduler, dispatcher, decoder, registers, alu, pc, lsu,
-            lsu_arbiter, lsu_write_arbiter, vector_mac (8-lane vector MAC),
-            fc_mac (FC + argmax), main_memory, program_memory, dma_controller,
-            data_pipeline, uart_rx/tx, gowin_pll, top
-software/   Rust crate: assembler (src/main.rs) + J++ compiler (src/bin/jpp.rs);
-            example kernels (*.asm, *.jpp); Python UART host scripts (send_kernel.py)
-test/       tb*.sv — self-checking testbenches (loadrun, divergence, warps, MAC, MLP)
-oss_build/  open-source synthesis flow (run_oss.sh, build_cfg.sh)
-*.sh, *.tcl headless Gowin build/flash on macOS
+src/        gpu, core, scheduler, dispatcher, decoder, registers, alu, pc,
+            lsu, lsu_arbiter, lsu_write_arbiter, vector_mac, fc_mac,
+            main_memory, program_memory, dma_controller, data_pipeline,
+            uart_rx, uart_tx, hdmi, gowin_pll, top
+software/   Rust crate. Assembler in src/main.rs, J++ in src/bin/jpp.rs.
+            Kernels (*.jpp, *.asm). UART host scripts. MNIST weights.
+test/       Self-checking testbenches.
+demo/       Draw-a-digit page.  make demo
+docs/       Diagrams, and the two recordings in docs/videos/
+oss_build/  Yosys + nextpnr flow.
+drills/     Six small Verilog exercises, with solutions.
 ```
-
