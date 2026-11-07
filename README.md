@@ -18,29 +18,15 @@ The hardware is a descendant of Adam Majmudar's [tiny-gpu](https://github.com/ad
 
 ## See it run
 
-The two recordings from the thread. Each one plays here. Click it for the original file.
+The two recordings from the thread.
 
-<p align="center">
-  <a href="docs/videos/mnist-inference.mp4">
-    <img src="docs/videos/mnist-inference.gif" width="360" alt="A Tang Nano 20K on a desk classifies a handwritten 5 drawn in the browser.">
-  </a>
-</p>
+**MNIST.** Draw a digit. The board on the desk classifies it.
 
-<p align="center">
-  <b>MNIST.</b> Draw a digit. The board on the desk classifies it.<br>
-  <a href="docs/videos/mnist-inference.mp4">docs/videos/mnist-inference.mp4</a>
-</p>
+https://github.com/user-attachments/assets/483893c5-2ad0-419e-acb1-64ace0cbf1e4
 
-<p align="center">
-  <a href="docs/videos/jpp-kernel.mp4">
-    <img src="docs/videos/jpp-kernel.gif" width="820" alt="A J++ loop compiles, streams to the FPGA, and both cores return 28.">
-  </a>
-</p>
+**J++.** Sum `0..7`. Both cores reply `28` (`0x1C`).
 
-<p align="center">
-  <b>J++.</b> Sum <code>0..7</code>. Both cores reply <code>28</code> (<code>0x1C</code>).<br>
-  <a href="docs/videos/jpp-kernel.mp4">docs/videos/jpp-kernel.mp4</a>
-</p>
+https://github.com/user-attachments/assets/e584bf2e-4f50-4bc3-861e-336ae5489037
 
 That second clip is one command. It compiles the kernel, assembles it, streams the binary over UART, runs it on both cores, and prints what they send back.
 
