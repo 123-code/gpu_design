@@ -68,7 +68,13 @@ module decoder #(
     output reg decoded_lui,
     
     // Pop the reconvergence stack and switch to sleeping threads
-    output reg decoded_sync
+    output reg decoded_sync,
+
+    // LDS/STS: the load/store addresses shared memory (LDR with imm bit 5,
+    // STR with rd field bit 0)
+    output reg decoded_shared,
+    // BAR: block-wide barrier across the core's warps (RET with bit 1)
+    output reg decoded_bar
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -133,6 +139,8 @@ module decoder #(
             decoded_id_read <= 0;
             decoded_lui <= 0;
             decoded_sync <= 0;
+            decoded_shared <= 0;
+            decoded_bar <= 0;
 
         end else begin
             // Only decode in the DECODE stage (4-bit state = 0011)
@@ -176,6 +184,8 @@ module decoder #(
                 decoded_id_read <= 0;
                 decoded_lui <= 0;
                 decoded_sync <= 0;
+                decoded_shared <= 0;
+                decoded_bar <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -258,6 +268,9 @@ module decoder #(
                         decoded_reg_write_enable <= 1;
                         decoded_mem_read_enable  <= 1;
                         decoded_reg_input_mux    <= MUX_MEMORY;
+                        // LDS Rd,[Rs]: bit 5 of the (otherwise unused) low
+                        // field picks shared memory, 16-bit halfword
+                        decoded_shared           <= instruction[5];
                     end
                     MACL: begin
                         // Push rs into the MAC operand buffer (no register write)
@@ -290,10 +303,15 @@ module decoder #(
                         // Store/emit: the LSU writes rt to the address in rs
                         // (rs == 63 routes to the memory-mapped UART TX).
                         decoded_mem_write_enable <= 1;
+                        // STS Rt,[Rs]: rd field (unused by STR) bit 0 picks
+                        // shared memory, 16-bit halfword
+                        decoded_shared           <= instruction[9];
                     end
                     RET: begin 
                         if (instruction[0] == 1'b1) begin
                             decoded_sync <= 1;
+                        end else if (instruction[1] == 1'b1) begin
+                            decoded_bar <= 1;             // BAR (0xF002)
                         end else begin
                             decoded_ret <= 1;                     
                         end

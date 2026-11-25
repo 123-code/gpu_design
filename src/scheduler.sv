@@ -18,6 +18,7 @@ module scheduler #(
 
     // Divergence signals
     input wire decoded_sync,
+    input wire decoded_bar,
     input wire decoded_pc_mux,
     input wire [7:0] decoded_immediate,
     input wire [THREADS_PER_BLOCK-1:0] branch_votes,
@@ -40,7 +41,9 @@ module scheduler #(
                REQUEST = 4'b0100, WAIT = 4'b0101, EXECUTE = 4'b0110, 
                UPDATE = 4'b0111, DONE = 4'b1000;
 
-    localparam WARP_READY = 2'b00, WARP_WAITING = 2'b01, WARP_DONE = 2'b10;
+    // WARP_BARRIER: parked at a BAR until every live warp of the block arrives
+    localparam WARP_READY = 2'b00, WARP_WAITING = 2'b01, WARP_DONE = 2'b10,
+               WARP_BARRIER = 2'b11;
 
     reg [7:0] warp_pc [WARPS_PER_CORE-1:0];
     reg [THREADS_PER_BLOCK-1:0] active_mask [WARPS_PER_CORE-1:0]; // which threads are awake
@@ -133,18 +136,31 @@ module scheduler #(
                 // is DONE, the block is finished.
                 reg        sw_found;
                 reg        sw_all_done;
+                reg        sw_at_bar;    // some warp is parked at a BAR
+                reg        sw_bar_open;  // ... and every live warp is
                 integer    sw;
                 sw_found    = 1'b0;
                 sw_all_done = 1'b1;
+                sw_at_bar   = 1'b0;
+                sw_bar_open = 1'b1;
                 for (sw = 0; sw < WARPS_PER_CORE; sw = sw + 1) begin
                     if (!sw_found && warp_status[sw] == WARP_READY) begin
                         current_warp <= sw[0];   // 1-bit (WARPS_PER_CORE <= 2)
                         sw_found = 1'b1;
                     end
                     if (warp_status[sw] != WARP_DONE) sw_all_done = 1'b0;
+                    if (warp_status[sw] == WARP_BARRIER) sw_at_bar = 1'b1;
+                    if (warp_status[sw] == WARP_READY || warp_status[sw] == WARP_WAITING)
+                        sw_bar_open = 1'b0;
                 end
                 if (sw_found)            core_state <= FETCH;
                 else if (sw_all_done)    core_state <= DONE;
+                else if (sw_at_bar && sw_bar_open) begin
+                    // Barrier complete: every warp that has not exited is
+                    // parked at it. Release them all; pick one next cycle.
+                    for (sw = 0; sw < WARPS_PER_CORE; sw = sw + 1)
+                        if (warp_status[sw] == WARP_BARRIER) warp_status[sw] <= WARP_READY;
+                end
             end
             FETCH: begin //fetching the next instruction
                 core_state <= DECODE;
@@ -224,8 +240,12 @@ module scheduler #(
                 end
             end
             UPDATE: begin // depending on decoded_ret, if high, we're done, if low, we fetch another instrcution
-                if (decoded_ret) begin 
+                if (decoded_ret) begin
                     warp_status[current_warp] <= WARP_DONE;
+                    core_state <= SELECT_WARP;
+                end else if (decoded_bar) begin
+                    // Park at the barrier (PC already points past BAR)
+                    warp_status[current_warp] <= WARP_BARRIER;
                     core_state <= SELECT_WARP;
                 end else begin 
                     core_state <= SELECT_WARP; // Context switch every instruction!

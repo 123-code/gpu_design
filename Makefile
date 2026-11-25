@@ -6,12 +6,12 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: regress regress-full sim-grid mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full sim-grid sim-smem mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Regression: every self-checking testbench that runs in a few seconds.
 # regress-full adds the minute-scale end-to-end sims and a short fuzz.
 REGRESS = sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp \
-          sim-nn sim-mnist-jpp sim-jpp-features sim-grid
+          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem
 REGRESS_FULL = $(REGRESS) sim-mlp2 sim-mnist-jpp-full sim-raycast sim-hdmi
 regress:        ## Run the fast self-checking testbenches; stops at the first FAIL
 	@python3 test/regress.py $(REGRESS)
@@ -207,3 +207,9 @@ sim-grid:       ## Grid scheduling: 9 blocks over 2 cores, reply in blockIdx ord
 	cd software && cargo run --quiet -- grid_kernel.asm grid_kernel.hex > /dev/null
 	$(IVERILOG) -g2012 -s tb -o sim_grid test/tb_grid.sv src/*.sv
 	$(VVP) sim_grid
+
+sim-smem:       ## Shared memory (LDS/STS) + BAR: lanes read neighbours across warps; no-BAR control must fail
+	cd software && cargo run --quiet -- smem_kernel.asm smem_kernel.hex > /dev/null
+	cd software && cargo run --quiet -- smem_nobar_kernel.asm smem_nobar_kernel.hex > /dev/null
+	$(IVERILOG) -g2012 -s tb -o sim_smem test/tb_smem.sv src/*.sv
+	$(VVP) sim_smem

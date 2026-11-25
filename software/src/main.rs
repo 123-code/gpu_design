@@ -123,6 +123,9 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         }
         "CMP" => vec![w(0b0011, 0, reg(&toks[1]), reg(&toks[2]))],
         "LDR" => vec![w(0b0100, reg(&toks[1]), reg(&toks[2]), 0)],
+        // LDS Rd,[Rs] : Rd = shared-memory halfword at byte address Rs (bit 0
+        // ignored). LDR with bit 5 set; no base pointer.
+        "LDS" => vec![w(0b0100, reg(&toks[1]), reg(&toks[2]), 0b100000)],
         // MACL Rpix           -> push (pixel=Rpix, weight=R0)
         // MACL Rpix, Rweight   -> push (pixel=Rpix, weight=Rweight)
         "MACL" => vec![w(0b0110, 0, reg(&toks[1]), toks.get(2).map_or(0, |t| reg(t) & 7))],
@@ -147,11 +150,17 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "WBASE" => vec![w(0b1001, 0b100, 0, imm(&toks[1]))],
         // STR Rdata,[Raddr]  ->  addr in [8:6], data in [2:0]
         "STR" => vec![w(0b1011, 0, reg(&toks[2]), reg(&toks[1]) & 7)],
+        // STS Rt,[Rs] : shared halfword at byte address Rs = Rt. STR with the
+        // (unused) rd field = 1.
+        "STS" => vec![w(0b1011, 1, reg(&toks[2]), reg(&toks[1]) & 7)],
         "RET" => vec![0xF000],
         // SYNC: RET opcode with bit 0 set -> decoder raises decoded_sync, which
         // pops the warp's reconvergence stack (run the other side of a divergent
         // branch). No new opcode needed.
         "SYNC" => vec![0xF001],
+        // BAR: block-wide barrier. Every warp of the block parks here until
+        // all live warps have arrived (CUDA __syncthreads). RET with bit 1.
+        "BAR" => vec![0xF002],
 
         // ---- FC-MAC + argmax coprocessor (opcode 0000, sub-fn in [5:4]) ----
         "FRST" => vec![0x0000],                                   // [5:4]=00 reset engine

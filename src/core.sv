@@ -82,6 +82,8 @@ module core #(
     wire decoded_id_read;
     wire decoded_lui;
     wire decoded_sync; // NEW
+    wire decoded_shared;   // LDS/STS
+    wire decoded_bar;      // BAR
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
     
     wire current_warp;
@@ -130,6 +132,8 @@ module core #(
         .decoded_id_read(decoded_id_read),
         .decoded_lui(decoded_lui),
         .decoded_sync(decoded_sync),
+        .decoded_shared(decoded_shared),
+        .decoded_bar(decoded_bar),
         .decoded_mac_byte(decoded_mac_byte)
     );
 
@@ -148,6 +152,7 @@ module core #(
         .lsu_state_flat(lsu_states_flat),
         
         .decoded_sync(decoded_sync),
+        .decoded_bar(decoded_bar),
         .decoded_pc_mux(decoded_pc_mux),
         .decoded_immediate(decoded_immediate[7:0]), // branch target is PC-domain (8-bit)
         .branch_votes(branch_votes),
@@ -199,11 +204,13 @@ module core #(
     // Flattened arrays for LSU Arbiter
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] lsu_req;
     wire [ADDR_BITS-1:0] lsu_addr [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] lsu_space;
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] arb_ready;
-    wire [7:0] arb_rdata [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [15:0] arb_rdata [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
 
     // Per-warp/thread wires for LSU
     wire lsu_mem_valid [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire lsu_mem_space [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [ADDR_BITS-1:0] lsu_mem_addr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [7:0] lsu_mem_write_data [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
@@ -252,16 +259,49 @@ module core #(
     endgenerate
 
     wire lsu_we [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire lsu_we_space [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [ADDR_BITS-1:0] lsu_waddr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire [7:0] lsu_wdata [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [15:0] lsu_wdata [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
     // Per-lane write requests serialized onto the single memory write port by the
     // write arbiter (mirrors the read arbiter above). This is what lets every lane
     // store its own result instead of only thread 0 (e.g. one neuron per lane).
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] we_req_flat;
     wire [ADDR_BITS-1:0] waddr_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
-    wire [7:0]           wdata_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [15:0]          wdata_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] wspace_flat;
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] wgrant_flat;
+
+    // ==========================================
+    // SHARED MEMORY (per core, CUDA __shared__)
+    // ==========================================
+    // 1 KB scratchpad the threads reach with LDS/STS (16-bit halfwords) and
+    // the tensor core reads 32-bit operand words from. Its read port is
+    // shared between the LSU read arbiter and the tensor core; its write
+    // port belongs to the LSU write arbiter.
+    wire        sh_we;
+    wire [7:0]  sh_waddr;
+    wire [31:0] sh_wdata;
+    wire [3:0]  sh_wbe;
+    wire [7:0]  sh_raddr;
+    wire [31:0] sh_rdata;
+    wire [7:0]  arb_sh_raddr;
+    wire        arb_sh_busy;
+    wire        sh_rd_hold;             // another unit wants the read port
+    wire        sh_rd_gnt;              // ... and has it this cycle
+    wire [7:0]  unit_sh_raddr;          // that unit's word address
+
+    shared_memory #(.WORDS(256)) u_smem (
+        .clk(clk),
+        .we(sh_we), .waddr(sh_waddr), .wdata(sh_wdata), .wbe(sh_wbe),
+        .raddr(sh_raddr), .rdata(sh_rdata)
+    );
+    // The borrowing unit gets the port once no LSU shared read is in flight
+    // (the arbiter stops accepting new requests as soon as it asks).
+    assign sh_rd_gnt = sh_rd_hold && !arb_sh_busy;
+    assign sh_raddr  = sh_rd_gnt ? unit_sh_raddr : arb_sh_raddr;
+    assign sh_rd_hold    = 1'b0;    // no other reader yet
+    assign unit_sh_raddr = 8'd0;
 
     lsu_write_arbiter #(
         .THREADS(WARPS_PER_CORE * THREADS_PER_BLOCK),
@@ -272,9 +312,15 @@ module core #(
         .we_req(we_req_flat),
         .waddr(waddr_flat),
         .wdata(wdata_flat),
+        .space(wspace_flat),
+        .hold(1'b0),
         .mem_we(mem_we),
         .mem_waddr(mem_waddr),
         .mem_wdata(mem_wdata),
+        .sh_we(sh_we),
+        .sh_waddr(sh_waddr),
+        .sh_wdata(sh_wdata),
+        .sh_wbe(sh_wbe),
         .wgrant(wgrant_flat)
     );
 
@@ -287,8 +333,13 @@ module core #(
         .reset(reset),
         .req(lsu_req),
         .addr(lsu_addr),
+        .space(lsu_space),
+        .hold(sh_rd_hold),
+        .sh_busy(arb_sh_busy),
         .mem_raddr(mem_raddr),
         .mem_rdata(mem_rdata),
+        .sh_raddr(arb_sh_raddr),
+        .sh_rdata(sh_rdata),
         .ready(arb_ready),
         .rdata(arb_rdata)
     );
@@ -476,6 +527,7 @@ module core #(
                     .decoded_mem_write(decoded_mem_write_enable),
                     .decoded_base_add(decoded_base_add),
                     .decoded_wbase_add(decoded_wbase_add),
+                    .decoded_shared(decoded_shared),
                     .decoded_immediate(decoded_immediate),
 
                     .rs(rs_bus[w][i]),
@@ -483,6 +535,7 @@ module core #(
 
                     .mem_valid(lsu_mem_valid[w][i]),
                     .mem_addr(lsu_mem_addr[w][i]),
+                    .mem_space(lsu_mem_space[w][i]),
                     .mem_write_data(lsu_mem_write_data[w][i]),
                     .mem_ready(arb_ready[flat_id]),
                     .mem_read_data(arb_rdata[flat_id]),
@@ -490,6 +543,7 @@ module core #(
                     .we_req(lsu_we[w][i]),
                     .waddr(lsu_waddr[w][i]),
                     .wdata(lsu_wdata[w][i]),
+                    .we_space(lsu_we_space[w][i]),
                     .wgrant(wgrant_flat[flat_id]),
 
                     .emit_valid(lsu_emit_valid[w][i]),
@@ -504,11 +558,13 @@ module core #(
                 // Tie read-arbiter flattened arrays
                 assign lsu_req[flat_id] = lsu_mem_valid[w][i];
                 assign lsu_addr[flat_id] = lsu_mem_addr[w][i];
+                assign lsu_space[flat_id] = lsu_mem_space[w][i];
 
                 // Tie write-arbiter flattened arrays
                 assign we_req_flat[flat_id] = lsu_we[w][i];
                 assign waddr_flat[flat_id]  = lsu_waddr[w][i];
                 assign wdata_flat[flat_id]  = lsu_wdata[w][i];
+                assign wspace_flat[flat_id] = lsu_we_space[w][i];
 
                 pc thread_pc (
                     .clk(clk),

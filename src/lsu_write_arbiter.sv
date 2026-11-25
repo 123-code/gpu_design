@@ -1,8 +1,8 @@
 `default_nettype none
 `timescale 1ns/1ns
 
-// Serializes many thread LSUs' WRITE requests onto main_memory's single write
-// port. Mirror of lsu_arbiter.sv (which does the same for reads), but simpler:
+// Serializes many thread LSUs' WRITE requests onto the core's memory write
+// ports. Mirror of lsu_arbiter.sv (which does the same for reads), but simpler:
 // a BRAM write commits in one cycle, so there is no read-latency WAIT state.
 //
 // Each cycle: if any write is pending, pick the lowest-index requester, drive
@@ -10,9 +10,12 @@
 // SAME cycle. The lane's LSU holds we_req until it sees wgrant, then advances.
 // N lanes writing at once drain over N cycles (one commit per cycle).
 //
-// Without this, only thread 0 could write (core.sv hardwired the port to lane 0),
-// so a SIMT layer could not emit one result per lane. This is the unlock that
-// lets each lane scatter its own output to a distinct address.
+// Two address spaces, as in lsu_arbiter.sv:
+//   space 0  main memory: the low byte of wdata at waddr
+//   space 1  shared memory: the 16-bit halfword at byte address waddr, as a
+//            32-bit word write with byte enables (addr[1] picks the half)
+// `hold` grants nothing (another unit, the copy engine, owns the shared
+// write port this cycle).
 module lsu_write_arbiter #(
     parameter THREADS   = 4,
     parameter ADDR_BITS = 13
@@ -23,12 +26,21 @@ module lsu_write_arbiter #(
     // ---- write requests from the thread LSUs ----
     input  wire [THREADS-1:0]      we_req,                // held until granted
     input  wire [ADDR_BITS-1:0]    waddr [THREADS-1:0],
-    input  wire [7:0]              wdata [THREADS-1:0],
+    input  wire [15:0]             wdata [THREADS-1:0],
+    input  wire [THREADS-1:0]      space,                 // 1 = shared memory
 
-    // ---- single write port into main_memory ----
+    input  wire                    hold,
+
+    // ---- main memory write port ----
     output reg                  mem_we,
     output reg  [ADDR_BITS-1:0] mem_waddr,
     output reg  [7:0]           mem_wdata,
+
+    // ---- shared memory write port ----
+    output reg                  sh_we,
+    output reg  [7:0]           sh_waddr,               // word address
+    output reg  [31:0]          sh_wdata,
+    output reg  [3:0]           sh_wbe,
 
     // ---- per-lane grant (1-cycle pulse, same cycle the write commits) ----
     output reg  [THREADS-1:0]   wgrant
@@ -57,19 +69,30 @@ module lsu_write_arbiter #(
             mem_we        <= 1'b0;
             mem_waddr     <= '0;
             mem_wdata     <= 8'd0;
+            sh_we         <= 1'b0;
+            sh_waddr      <= 8'd0;
+            sh_wdata      <= 32'd0;
+            sh_wbe        <= 4'd0;
             wgrant        <= '0;
             last_grant_oh <= '0;
         end else begin
             wgrant        <= '0;           // wgrant is a 1-cycle pulse
             last_grant_oh <= '0;
-            if (any) begin
-                mem_we      <= 1'b1;       // commit this lane's write this cycle
-                mem_waddr   <= waddr[sel];
-                mem_wdata   <= wdata[sel];
+            mem_we        <= 1'b0;
+            sh_we         <= 1'b0;
+            if (any && !hold) begin
+                if (space[sel]) begin
+                    sh_we    <= 1'b1;
+                    sh_waddr <= waddr[sel][9:2];
+                    sh_wdata <= {wdata[sel], wdata[sel]};
+                    sh_wbe   <= waddr[sel][1] ? 4'b1100 : 4'b0011;
+                end else begin
+                    mem_we    <= 1'b1;     // commit this lane's write this cycle
+                    mem_waddr <= waddr[sel];
+                    mem_wdata <= wdata[sel][7:0];
+                end
                 wgrant[sel] <= 1'b1;       // ack the granted lane
                 last_grant_oh[sel] <= 1'b1;
-            end else begin
-                mem_we <= 1'b0;
             end
         end
     end

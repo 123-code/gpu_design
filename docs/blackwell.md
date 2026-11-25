@@ -10,6 +10,7 @@ drive each one and the testbench that proves it.
 | Feature | Blackwell / CUDA counterpart | Test |
 |---|---|---|
 | [Grid scheduling](#grid-scheduling) | CTA scheduler, `gridDim` | `make sim-grid` |
+| [Shared memory + barrier](#shared-memory--barrier) | `__shared__`, `__syncthreads()` | `make sim-smem` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -48,6 +49,41 @@ are deliberately the slow ones, so one core sits on block 0 while the other
 works through later blocks, some of which finish first. The test checks every
 block's result, that the reply is in blockIdx order, that each block was
 issued exactly once, and that both cores got work (4 and 5 blocks).
+
+---
+
+## Shared memory + barrier
+
+Each core now has a 1 KB scratchpad (`src/shared_memory.sv`) next to its
+data memory: 256 words of 32 bits. It is 32 bits wide because the tensor
+core (next section) pulls whole operand rows out of it; threads see it as
+16-bit halfwords, the register width.
+
+| Instruction | Encoding | Meaning |
+|---|---|---|
+| `LDS Rd, [Rs]` | `LDR` with imm bit 5 | Rd = shared halfword at byte address Rs |
+| `STS Rt, [Rs]` | `STR` with rd field = 1 | shared halfword at byte address Rs = Rt |
+| `BAR` | `0xF002` (`RET` with bit 1) | wait until every live warp of the block is here |
+
+No opcode was spent: all 16 are taken, so each new instruction lives in a
+field its host instruction leaves unused (`LDR` never used its low 6 bits,
+`STR` never used rd, `RET` only used bit 0 for `SYNC`).
+
+Both address spaces go through the same per-core read and write arbiters,
+which now carry an address-space bit per request. Main memory still returns a
+zero-extended byte; shared memory returns the halfword, and stores use byte
+enables so a halfword write leaves the other half of the word alone.
+
+`BAR` parks the warp in a new `WARP_BARRIER` state. When no warp is ready
+or waiting on memory and at least one is parked, the scheduler releases them
+all. A warp that has already exited does not hold the barrier up.
+
+`make sim-smem` runs a kernel where each of the 8 threads writes a 16-bit
+value to shared memory, barriers, and reads its neighbour's slot, which for
+threads 3 and 7 belongs to the other warp. All 16 lanes (2 cores x 8) must
+read the right value. The same kernel without the `BAR` is the negative
+control and must get lanes wrong. It does (2 of 16): the scheduler favours
+warp 0, which reads warp 1's slots before warp 1 has written them.
 
 ---
 

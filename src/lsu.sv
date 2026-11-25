@@ -17,6 +17,7 @@ module lsu #(
     input wire decoded_mem_write,        // 1 = STR store instruction
     input wire decoded_base_add,         // 1 = ADDB  read window (read base  += immediate)
     input wire decoded_wbase_add,        // 1 = WBASE slide read window forward (write base += immediate)
+    input wire decoded_shared,           // 1 = LDS/STS: the shared-memory address space
     input wire [DATA_BITS-1:0] decoded_immediate,  // amount to add to a base
 
     // Data Pins (From Registers)
@@ -26,9 +27,10 @@ module lsu #(
     // Highway to Arbiter/FIFO (reads)
     output reg mem_valid,                // LSU requests data"
     output reg [ADDR_BITS-1:0] mem_addr,//memory address to be read from the LSU
+    output reg mem_space,                // 0 = main memory, 1 = shared memory
     output reg [7:0] mem_write_data,
     input wire mem_ready,                // "flag from memory controller indicating the data has been sent"
-    input wire [7:0] mem_read_data,      // Payload from RAM
+    input wire [15:0] mem_read_data,     // byte (main, zero-extended) or halfword (shared)
 
     // Write REQUEST to the per-core write arbiter (STR to a non-MMIO address).
     // we_req is HELD until the arbiter grants this lane (wgrant), serializing all
@@ -36,7 +38,8 @@ module lsu #(
     // port pulse hardwired to lane 0; now EVERY lane can write its own result.)
     output reg                  we_req,
     output reg [ADDR_BITS-1:0]  waddr,
-    output reg [7:0]            wdata,
+    output reg [15:0]           wdata,    // main memory stores the low byte
+    output reg                  we_space, // 0 = main memory, 1 = shared memory
     input  wire                 wgrant,   // 1-cycle ack from the write arbiter
 
     // Memory-mapped emit (STR to offset 63 -> UART TX). Handshake throttles the
@@ -60,6 +63,7 @@ module lsu #(
     reg [ADDR_BITS-1:0] wbase;   // write base (WBASE)
     reg active_is_read;
     reg active_is_write;
+    reg active_is_shared;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -73,6 +77,9 @@ module lsu #(
 
             mem_valid <= 0;
             mem_addr <= '0;
+            mem_space <= 0;
+            we_space <= 0;
+            active_is_shared <= 0;
             
             we_req <= 0;
             waddr <= '0;
@@ -94,6 +101,7 @@ module lsu #(
                 // here would use the previous instruction's operands (a load-use
                 // hazard). Defer the actual issue to state 01.
                 2'b00: if (core_state == 4'b0100 && thread_active && warp_active) begin
+                    active_is_shared <= decoded_shared;
                     if (decoded_mem_read) begin
                         active_is_read  <= 1'b1;
                         active_is_write <= 1'b0;
@@ -108,18 +116,29 @@ module lsu #(
                 // ---- 01 ISSUE: rs/rt are valid now -> form the address/data ----
                 2'b01: begin
                     if (active_is_read) begin
+                        // LDS addresses shared memory directly (no base);
+                        // LDR is base-relative into main memory.
                         mem_valid <= 1'b1;
-                        mem_addr  <= base + rs[ADDR_BITS-1:0];
+                        mem_space <= active_is_shared;
+                        mem_addr  <= active_is_shared ? rs[ADDR_BITS-1:0]
+                                                      : base + rs[ADDR_BITS-1:0];
                         lsu_state <= 2'b10;
                     end else begin
-                        if (rs == MMIO_TX) begin
+                        if (active_is_shared) begin
+                            we_req    <= 1'b1;             // STS: halfword to shared
+                            we_space  <= 1'b1;
+                            waddr     <= rs[ADDR_BITS-1:0];
+                            wdata     <= rt;
+                            lsu_state <= 2'b10;
+                        end else if (rs == MMIO_TX) begin
                             emit_valid <= 1'b1;            // offset 63 -> UART TX
                             emit_data  <= rt[7:0];         // byte-wide UART
                             lsu_state  <= 2'b10;
                         end else begin
                             we_req    <= 1'b1;             // request a BRAM write
+                            we_space  <= 1'b0;
                             waddr     <= wbase + rs[ADDR_BITS-1:0];
-                            wdata     <= rt[7:0];          // byte-wide memory: store low byte
+                            wdata     <= rt;               // byte-wide memory: low byte lands
                             lsu_state <= 2'b10;            // wait for the arbiter grant
                         end
                     end
@@ -130,7 +149,7 @@ module lsu #(
                     if (active_is_read) begin
                         if (mem_ready) begin
                             mem_valid <= 1'b0;
-                            lsu_out   <= {{(DATA_BITS-8){1'b0}}, mem_read_data};  // zero-extend byte load
+                            lsu_out   <= mem_read_data;  // byte zero-extended, or a shared halfword
                             lsu_state <= 2'b11;
                         end
                     end else if (emit_valid) begin
