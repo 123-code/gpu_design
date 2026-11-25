@@ -16,6 +16,7 @@ drive each one and the testbench that proves it.
 | [TMA bulk copy](#tma-bulk-copy) | Tensor Memory Accelerator, `cp.async.bulk` | `make sim-tma` |
 | [Global memory: SDRAM + L1](#global-memory-sdram--l1) | HBM3e + memory controllers, per-SM L1 | `make sim-sdram`, `make sim-global` |
 | [Clusters: DSMEM, CBAR, MMA2](#clusters-dsmem-cbar-mma2) | thread-block clusters, distributed shared memory, `cta_group::2` | `make sim-cluster` |
+| [Overlapped issue](#overlapped-issue) | the SM's instruction pipeline | `make sim-cpi` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -326,6 +327,60 @@ issues `MMA2`. Both cores' results are checked byte for byte. Two planted
 bugs fail the test: making `CBAR` not wait for the peer, and having `MMA2`
 read the local half of B twice. The first only failed once rank 1 was made
 late: with both blocks in lockstep the race never shows.
+
+---
+
+## Overlapped issue
+
+Every instruction used to walk the whole scheduler FSM, one state per
+cycle, with nothing overlapped:
+
+```
+before:  SELECT_WARP  FETCH  DECODE  REQUEST  EXECUTE  UPDATE      6 cycles
+after:                       DECODE  EXECUTE  UPDATE               3 cycles
+                                              (+ next FETCH, next warp pick)
+```
+
+Two changes, both in `src/scheduler.sv` / `src/registers.sv`:
+
+1. **Fetch overlaps writeback.** In UPDATE, the scheduler already knows
+   whether this instruction retires or parks its warp, so it picks the next
+   warp then (same policy as before: lowest-index ready warp) and drives the
+   instruction memory with that warp's PC. The cycle after UPDATE is the
+   next instruction's DECODE. `SELECT_WARP` and `FETCH` only run when no
+   warp is ready (waiting on memory, at a barrier, or done).
+2. **Operands are read in DECODE.** The register file latches rs/rt
+   straight from the instruction word's fields instead of waiting a cycle
+   for the registered decoder. Compute instructions then go DECODE ->
+   EXECUTE. Loads/stores, tensor-core and copy-engine instructions still
+   take REQUEST (the LSU starts there, and the busy-unit check lives there).
+   The previous instruction's writeback lands on the edge before DECODE, so
+   back-to-back dependent instructions need no forwarding.
+
+| | before | after |
+|---|---|---|
+| compute loop, 1 warp (`make sim-cpi`) | 6.01 cycles/instr | 3.02 |
+| compute loop, 2 warps | 6.00 | 3.01 |
+| tensor-core kernel, thread copy loop (`sim-mma`, s8) | 3374 cycles | 2621 |
+| tensor-core kernel, TMA staging (`sim-tma`, s8) | 1408 cycles | 1095 |
+| compiled CNN, fuzz seed 1 (9 lanes, load-bound) | 202935 cycles | 191307 |
+
+The gain shrinks as memory takes over: the compiled models spend most of
+their time in loads that the read arbiter serializes lane by lane (3 cycles
+per lane), which this change does not touch.
+
+`make sim-cpi` fails above 3.2 cycles per instruction, so a change that
+quietly lengthens the issue loop is caught (the previous design fails it at
+6.0).
+
+**What this is not.** A real SM issues an instruction every cycle,
+interleaving warps through a deep pipeline and using a scoreboard to track
+which registers are still being written. Here each warp has one instruction
+in flight and the core one instruction at a time. Getting to one instruction
+per cycle would need a control bundle per pipeline stage (today every unit
+reads the one decoder's outputs), a scoreboard, and per-stage warp tags.
+That is the next step, and it is a rewrite of the core's control path, not a
+patch.
 
 ---
 

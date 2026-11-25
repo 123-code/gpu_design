@@ -127,7 +127,7 @@ module core #(
     wire decoded_cbar, decoded_mma2;
     wire tma_busy;
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
-    
+
     wire current_warp;
     wire [WARPS_PER_CORE-1:0] warp_emit;   // per-warp: thread 0 has a UART emit in flight
     wire [THREADS_PER_BLOCK-1:0] branch_votes;
@@ -203,7 +203,7 @@ module core #(
         .start(start),
         .decoded_ret(decoded_ret), // It is finally alive!
         .lsu_state_flat(lsu_states_flat),
-        
+
         .decoded_sync(decoded_sync),
         .decoded_bar(decoded_bar),
         .decoded_cbar(decoded_cbar),
@@ -220,8 +220,10 @@ module core #(
         // LSU-touching instruction? Lets the scheduler skip REQUEST/WAIT for
         // compute-only ops (LDR/STR/emit decode these enables).
         .decoded_mem_op(decoded_mem_read_enable || decoded_mem_write_enable),
+        .instruction(current_instruction),
+        .fetch_addr(fetch_addr),
         .warp_emit(warp_emit),
-        
+
         .current_warp(current_warp),
         .warp_pc_flat(warp_pc_flat),
 
@@ -252,7 +254,7 @@ module core #(
 
     // Expose Warp 0 Thread 0's accumulator as this core's result
     assign result = reg3_bus[0][0];
-    
+
     // PC bus
     wire [7:0] pc_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [7:0] next_pc_bus [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
@@ -516,8 +518,16 @@ module core #(
         .rdata(arb_rdata)
     );
 
-    // Thread 0's PC from the active warp drives the instruction ROM address
-    assign instruction_address = warp_pc[current_warp];
+    // The scheduler drives the instruction ROM: the current warp's PC, or in
+    // UPDATE the next warp's (fetch overlapped with writeback)
+    wire [7:0] fetch_addr;
+    assign instruction_address = fetch_addr;
+
+    // Operand-read addresses from the raw instruction word (for DECODE).
+    // LUI (MOV with rs field 4) reads its own Rd, which it shifts.
+    wire [2:0] fetch_rs = (current_instruction[15:12] == 4'b0010 && current_instruction[8:6] == 3'b100)
+                        ? current_instruction[11:9] : current_instruction[8:6];
+    wire [2:0] fetch_rt = current_instruction[2:0];
 
     // ==========================================
     // THE VECTOR MAC FUNCTIONAL UNIT (shared, core-level)
@@ -727,7 +737,7 @@ module core #(
         for (w = 0; w < WARPS_PER_CORE; w = w + 1) begin : warp_block
             wire warp_active_flag = (current_warp == w);
             for (i = 0; i < THREADS_PER_BLOCK; i = i + 1) begin : thread_block
-                
+
                 localparam flat_id = w * THREADS_PER_BLOCK + i;
 
                 registers #(
@@ -752,6 +762,8 @@ module core #(
                     .decoded_rd_address(decoded_rd_address),
                     .decoded_rs_address(decoded_rs_address),
                     .decoded_rt_address(decoded_rt_address),
+                    .fetch_rs_address(fetch_rs),
+                    .fetch_rt_address(fetch_rt),
 
                     .decoded_reg_write_enable(decoded_reg_write_enable),
                     .decoded_reg_input_mux(decoded_reg_input_mux),
@@ -773,7 +785,7 @@ module core #(
 
                 lsu #(.ADDR_BITS(LA), .DATA_BITS(DATA_BITS)) thread_lsu (
                     .clk(clk),
-                    .reset(reset), 
+                    .reset(reset),
                     .enable(1'b1),
                     .thread_active(active_mask[w][i]),
                     .warp_active(warp_active_flag),

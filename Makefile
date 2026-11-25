@@ -6,12 +6,12 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: regress regress-full sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Regression: every self-checking testbench that runs in a few seconds.
 # regress-full adds the minute-scale end-to-end sims and a short fuzz.
 REGRESS = sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp \
-          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma sim-sdram sim-global sim-cluster
+          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi
 REGRESS_FULL = $(REGRESS) sim-mlp2 sim-mnist-jpp-full sim-raycast sim-hdmi
 regress:        ## Run the fast self-checking testbenches; stops at the first FAIL
 	@python3 test/regress.py $(REGRESS)
@@ -253,3 +253,10 @@ sim-cluster:    ## Clusters: DSMEM stores/loads across the core pair, CBAR, MMA2
 	  $(IVERILOG) -g2012 -s tb -o sim_cluster test/tb_cluster.sv src/*.sv && \
 	  $(VVP) sim_cluster +prefix=software/build/cluster_$$k | grep -E 'RESULT|core'; \
 	done
+
+sim-cpi:        ## Issue rate: cycles per compute instruction, 1 and 2 warps (fails above 3.2)
+	cd software && cargo run --quiet -- cpi_kernel.asm cpi_kernel.hex > /dev/null
+	$(IVERILOG) -g2012 -s tb -o sim_cpi test/tb_cpi.sv src/*.sv
+	$(VVP) sim_cpi | grep -E 'RESULT|cycles/'
+	$(IVERILOG) -g2012 -s tb -Ptb.BD=8 -o sim_cpi test/tb_cpi.sv src/*.sv
+	$(VVP) sim_cpi | grep -E 'RESULT|cycles/'

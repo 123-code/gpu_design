@@ -40,7 +40,14 @@ module scheduler #(
     // 1 if this instruction touches the LSU (LDR/STR/emit). Compute-only
     // instructions skip REQUEST/WAIT (they are pass-through for them).
     input wire decoded_mem_op,
-    
+
+    // The raw instruction word (ROM output). DECODE classifies it before the
+    // registered decoder has caught up, to pick EXECUTE or REQUEST.
+    input wire [15:0] instruction,
+    // The instruction memory address: the current warp's PC, except in
+    // UPDATE, where it is already the NEXT warp's PC (fetch overlaps writeback)
+    output wire [7:0] fetch_addr,
+
     // Warp State Outputs
     output reg current_warp, // Which warp is currently driving the pipeline?
     output wire [WARPS_PER_CORE*8-1:0] warp_pc_flat,                    // warp w's PC at [w*8 +: 8]
@@ -51,8 +58,8 @@ module scheduler #(
 );
 //instructions or states in which the scheduler finds itself
 //starts at idle, waiting for a sognal to run, once the dispatcher loads the image , the shceduler transitions to fetch
-    localparam IDLE = 4'b0000, SELECT_WARP = 4'b0001, FETCH = 4'b0010, DECODE = 4'b0011, 
-               REQUEST = 4'b0100, WAIT = 4'b0101, EXECUTE = 4'b0110, 
+    localparam IDLE = 4'b0000, SELECT_WARP = 4'b0001, FETCH = 4'b0010, DECODE = 4'b0011,
+               REQUEST = 4'b0100, WAIT = 4'b0101, EXECUTE = 4'b0110,
                UPDATE = 4'b0111, DONE = 4'b1000;
 
     // WARP_BARRIER: parked at a BAR until every live warp of the block arrives
@@ -104,6 +111,41 @@ module scheduler #(
     // reconvergence stack empties so post-merge code runs on all those lanes.
     reg [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0]        base_mask;      // mask per warp
 
+    // ------------------------------------------------------------------
+    // Overlapped issue. In UPDATE (the current instruction's writeback) the
+    // scheduler already picks the next warp and drives the instruction
+    // memory with its PC, so the next cycle is that instruction's DECODE --
+    // no SELECT_WARP or FETCH cycle in between. Same policy as SELECT_WARP:
+    // the lowest-index ready warp, where the current warp counts as ready
+    // unless this instruction retires it (RET) or parks it (BAR/CBAR).
+    // ------------------------------------------------------------------
+    reg       nx_found;
+    reg       nx_warp;
+    always @(*) begin
+        nx_found = 1'b0;
+        nx_warp  = 1'b0;
+        for (integer n = WARPS_PER_CORE - 1; n >= 0; n = n - 1) begin
+            if ((n == current_warp) ? !(decoded_ret || decoded_bar)
+                                    : (warp_status[n] == WARP_READY)) begin
+                nx_found = 1'b1;
+                nx_warp  = n[0];
+            end
+        end
+    end
+    assign fetch_addr = (core_state == UPDATE && nx_found) ? warp_pc[nx_warp]
+                                                            : warp_pc[current_warp];
+
+    // DECODE routing from the raw word: loads/stores need REQUEST (the LSU
+    // starts there) and WAIT; tensor-core and copy-engine instructions need
+    // REQUEST for the busy-unit check. Everything else goes straight to
+    // EXECUTE (its operands were read in DECODE).
+    wire [3:0] op = instruction[15:12];
+    wire needs_request = (op == 4'b0100) || (op == 4'b1011)                // LDR*, STR*
+                      || (op == 4'b0110 && instruction[11:9] != 3'd0)      // MMA, TCFG, MMA2
+                      || (op == 4'b0111 && instruction[8:6] != 3'd0)       // TLD, TLDQ
+                      || (op == 4'b1001 && instruction[10])                // TMA, TMAG
+                      || (op == 4'b1111 && instruction[2]);                // TMAWAIT
+
     wire [THREADS_PER_BLOCK-1:0] want_to_branch = branch_votes & active_mask[current_warp];
     wire [THREADS_PER_BLOCK-1:0] want_to_stay   = (~branch_votes) & active_mask[current_warp];
 
@@ -149,7 +191,7 @@ module scheduler #(
                     end
                     if (lsu_state[w][i] == 2'b01) warp_issuing[w] = 1;
                 end
-                
+
                 // Wake up if it was waiting and LSU is done (and, if it is
                 // parked on the tensor core, the unit is idle)
                 if (warp_status[w] == WARP_WAITING && !warp_is_waiting[w]
@@ -163,7 +205,7 @@ module scheduler #(
             // 2. Main FSM Pipeline
             case (core_state)//acts as a switchboard, checking the state of core_state register
             IDLE: begin//once the start signal comes in from dispatcher, we move on to FETCH
-                if (start) core_state <= SELECT_WARP; 
+                if (start) core_state <= SELECT_WARP;
             end
             SELECT_WARP: begin
                 // Lowest-index READY warp wins (loop form so it works for any
@@ -206,9 +248,11 @@ module scheduler #(
                 core_state <= DECODE;
             end
             DECODE: begin
-                // REQUEST always runs: the registered decoder makes rs/rt addresses
-                // valid only here, and registers.sv latches rs/rt during REQUEST.
-                core_state <= REQUEST;
+                // The register file latches rs/rt THIS cycle, straight from
+                // the instruction word, so a compute instruction can execute
+                // next cycle. Memory / tensor-core / copy-engine ops still go
+                // through REQUEST.
+                core_state <= needs_request ? REQUEST : EXECUTE;
             end
             REQUEST: begin
                 // For compute-only instructions WAIT is pure pass-through (the LSU
@@ -296,17 +340,22 @@ module scheduler #(
             UPDATE: begin // depending on decoded_ret, if high, we're done, if low, we fetch another instrcution
                 if (decoded_ret) begin
                     warp_status[current_warp] <= WARP_DONE;
-                    core_state <= SELECT_WARP;
                 end else if (decoded_bar) begin
                     // Park at the barrier (PC already points past BAR)
                     warp_status[current_warp] <= WARP_BARRIER;
                     if (decoded_cbar) bar_cluster <= 1'b1;
-                    core_state <= SELECT_WARP;
-                end else begin 
-                    core_state <= SELECT_WARP; // Context switch every instruction!
                 end
+                // The next warp's instruction is being fetched right now
+                // (fetch_addr); go straight to its DECODE. If no warp is
+                // ready, fall back to SELECT_WARP (barrier release, done
+                // detection, waiting for memory).
+                if (nx_found) begin
+                    current_warp <= nx_warp;
+                    core_state   <= DECODE;
+                end else
+                    core_state   <= SELECT_WARP;
             end
-            DONE: begin 
+            DONE: begin
             end
             endcase
             done <= (core_state == DONE);

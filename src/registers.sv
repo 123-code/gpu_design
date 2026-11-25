@@ -28,7 +28,11 @@ module registers #(
     input wire [3:0] decoded_rd_address,       // Destination slot (0 to 15)
     input wire [3:0] decoded_rs_address,       // Read slot 1
     input wire [3:0] decoded_rt_address,       // Read slot 2
-    
+    // Read addresses taken straight from the instruction word in DECODE
+    // (the registered decoder only has them a cycle later)
+    input wire [2:0] fetch_rs_address,
+    input wire [2:0] fetch_rt_address,
+
     input wire decoded_reg_write_enable,       // Switch: "Save data now!"
     input wire [1:0] decoded_reg_input_mux,    // Switch: "Where is the data coming from?"
     input wire [DATA_BITS-1:0] decoded_immediate, // Raw constant number from instruction
@@ -88,7 +92,7 @@ module registers #(
             // On boot, drain all electricity (set to 0)
             rs <= 0;
             rt <= 0;
-            
+
             // Empty the 13 free registers [cite: 333, 334, 335]
             registers[0] <= 8'b0; registers[1] <= 8'b0; registers[2] <= 8'b0;
             registers[3] <= 8'b0; registers[4] <= 8'b0; registers[5] <= 8'b0;
@@ -101,22 +105,24 @@ module registers #(
             registers[14] <= BLOCK_DIM;         // %blockDim (launch size, not warp size)
             registers[15] <= THREAD_ID;         // %threadIdx (global within the block)
 
-        end else if (enable) begin 
+        end else if (enable) begin
             // Update the block ID dynamically
             registers[13] <= block_id;
-            
+
             // --- READ ACTION ---
             // When the Scheduler is in State 3 (REQUEST) [cite: 340]
-            if (core_state == 4'b0100) begin // REQUEST: latch rs/rt
-                // Look inside the requested slots and push the data out the rs/rt pins [cite: 340, 341]
-                rs <= registers[decoded_rs_address]; 
-                rt <= registers[decoded_rt_address];
+            if (core_state == 4'b0011 && warp_active) begin // DECODE: latch rs/rt
+                // Operand read happens in DECODE, from the raw instruction
+                // fields, so compute instructions skip REQUEST entirely. The
+                // previous instruction's writeback landed on the edge before.
+                rs <= registers[{1'b0, fetch_rs_address}];
+                rt <= registers[{1'b0, fetch_rt_address}];
             end
 
             // --- WRITE ACTION ---
             // When the Scheduler is in State 6 (UPDATE) [cite: 341]
             if (core_state == 4'b0111) begin // UPDATE: write back
-                
+
                 // Only write if the Decoder says so, AND thread active is on
                 if (decoded_reg_write_enable && decoded_rd_address < 13 && thread_active && warp_active) begin
 
