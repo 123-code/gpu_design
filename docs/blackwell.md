@@ -282,6 +282,15 @@ check (588 of them) exposed it.
   must report hits, and the model must report zero violations. A planted
   bug in the L1 hit path fails the test.
 
+**A block is not done until its work has landed.** A posted store can
+still sit in the L1 write buffer after the block's last warp retires, and an
+MMA or TMA can still be running. A core now reports done only when its L1 is
+idle, its copy engine is idle and its tensor core is idle. Without that, the
+dispatcher's reset for the next block could wipe the pending store.
+`make sim-drain` (8 short blocks, each ending on an `STG`, with refresh
+nearly back to back so stores queue) loses 3 of 32 stores without the fix
+and none with it.
+
 On the board, the SDRAM port names follow the Tang Nano 20K's
 embedded-SDRAM examples. The SDRAM path has not been run on hardware.
 

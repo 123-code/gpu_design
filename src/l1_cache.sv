@@ -49,7 +49,9 @@ module l1_cache (
     input  wire        m_done,
 
     output reg  [15:0] hits,
-    output reg  [15:0] misses
+    output reg  [15:0] misses,
+    // nothing in flight: no fill, no store still sitting in the write buffer
+    output wire        idle
 );
     reg [127:0] data  [0:15];
     reg [7:0]   tag   [0:15];
@@ -65,6 +67,7 @@ module l1_cache (
     // Not during a fill: a store to the line being filled would be lost
     // when the (older) SDRAM data lands on top of it.
     assign wr_ack = wr_req && !wb_full && (state != S_FILL);
+    assign idle   = (state == S_IDLE) && !wb_full;
 
     reg [1:0]  beat;
     reg [15:0] cur;                     // address of the load being served

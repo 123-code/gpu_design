@@ -125,6 +125,7 @@ module core #(
     wire decoded_tma, decoded_tmawait, decoded_tma_global;
     wire decoded_global;   // LDG/STG
     wire decoded_cbar, decoded_mma2;
+    wire sched_done;       // every warp retired (done also waits for in-flight work)
     wire tma_busy;
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
 
@@ -228,7 +229,7 @@ module core #(
         .warp_pc_flat(warp_pc_flat),
 
         .core_state(core_state),
-        .done(done),
+        .done(sched_done),
         .active_mask_flat(active_mask_flat)
     );
 
@@ -349,14 +350,21 @@ module core #(
     wire [31:0] l1m_wdata;
     wire [3:0]  l1m_wbe;
     wire [15:0] l1_hits, l1_misses;
+    wire        l1_idle;
     l1_cache u_l1 (
         .clk(clk), .reset(reset),
         .rd_req(l1_rd_req), .rd_addr(l1_rd_addr), .rd_ack(l1_rd_ack), .rd_data(l1_rd_data),
         .wr_req(l1_wr_req), .wr_addr(l1_wr_addr), .wr_data(l1_wr_data), .wr_ack(l1_wr_ack),
         .m_req(l1m_req), .m_we(l1m_we), .m_addr(l1m_addr), .m_wdata(l1m_wdata), .m_wbe(l1m_wbe),
         .m_ack(l1m_ack), .m_rvalid(l1m_rvalid), .m_rdata(g_rdata), .m_done(l1m_done),
-        .hits(l1_hits), .misses(l1_misses)
+        .hits(l1_hits), .misses(l1_misses), .idle(l1_idle)
     );
+
+    // The block is done when every warp has retired AND nothing it started
+    // is still in flight: a posted store in the L1 write buffer, a TMA copy,
+    // an async MMA. Otherwise the dispatcher's reset for the next block (or
+    // the host reading results) could overtake them.
+    assign done = sched_done && l1_idle && !tma_busy && !tc_busy;
     wire        engm_req, engm_ack, engm_rvalid, engm_done;
     wire [20:0] engm_addr;
     wire [1:0]  gp_ack, gp_rvalid, gp_done;

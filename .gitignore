@@ -78,3 +78,4 @@ sim_sdram
 sim_global
 sim_cluster
 sim_cpi
+sim_drain
