@@ -23,6 +23,7 @@ pub enum IdentityReg {
     Tid,  // threadIdx — this lane's index within the warp
     Bid,  // blockIdx  — this core's block id
     Bdim, // blockDim  — threads per block
+    Gdim, // gridDim   — blocks in the launch
 }
 
 //"used inside a binaryop, to connect two expressions, allows 4 operations"

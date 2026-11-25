@@ -16,6 +16,7 @@ module registers #(
     input wire enable, // Is this thread active? (1 = Yes, 0 = No)
 
     input wire [7:0] block_id,    // Passed down from the Dispatcher
+    input wire [7:0] grid_dim,    // blocks in the launch (%gridDim)
     input wire [3:0] core_state,  // Passed down from the Scheduler (4-bit)
     input wire thread_active,                      // From Stage 1: Thread-level masking
     input wire warp_active,                        // NEW: Warp-level maskingwake?
@@ -32,7 +33,7 @@ module registers #(
     input wire [DATA_BITS-1:0] decoded_immediate, // Raw constant number from instruction
 
     // SIMT identity read (TID/BID/BDIM): when high, write the identity register
-    // picked by decoded_rs_address (1->R15, 2->R13, 3->R14) into rd.
+    // picked by decoded_rs_address (1->R15, 2->R13, 3->R14, 5->gridDim) into rd.
     input wire decoded_id_read,
 
     // LUI: when high, write (rs << 6) | imm6 into rd. The decoder points rs at rd,
@@ -121,6 +122,7 @@ module registers #(
                             4'd1: registers[decoded_rd_address] <= registers[15]; // TID  -> threadIdx
                             4'd2: registers[decoded_rd_address] <= registers[13]; // BID  -> blockIdx
                             4'd3: registers[decoded_rd_address] <= registers[14]; // BDIM -> blockDim
+                            4'd5: registers[decoded_rd_address] <= {{(DATA_BITS-8){1'b0}}, grid_dim}; // GDIM -> gridDim
                             default: registers[decoded_rd_address] <= registers[15];
                         endcase
                     end else if (decoded_lui) begin

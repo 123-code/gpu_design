@@ -102,7 +102,7 @@ impl Codegen {
     // If the last line wrote scratch register `from` as its destination, make it
     // write `to` instead (the scratch value was only needed for the copy).
     fn retarget_last(&mut self, from: u8, to: u8) -> bool {
-        const WRITES_RD: [&str; 12] = ["MOV", "LDI", "ADD", "ADDI", "SUB", "MUL", "SHR", "SHL", "LDR", "TID", "BID", "BDIM"];
+        const WRITES_RD: [&str; 13] = ["MOV", "LDI", "ADD", "ADDI", "SUB", "MUL", "SHR", "SHL", "LDR", "TID", "BID", "BDIM", "GDIM"];
         if from < SCRATCH_BASE {
             return false;
         }
@@ -309,6 +309,7 @@ impl Codegen {
                     IdentityReg::Tid => "TID",
                     IdentityReg::Bid => "BID",
                     IdentityReg::Bdim => "BDIM",
+                    IdentityReg::Gdim => "GDIM",
                 };
                 self.emit(format!("{} R{}", mnem, r));
                 Ok(r)

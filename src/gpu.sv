@@ -17,6 +17,7 @@ module gpu #(
     input wire clk,//clock input
     input wire reset,//reset signal, clears internal states to 0
     input wire enable,//when on, gpu issues thread blocks
+    input wire [7:0] grid_dim,//blocks in this launch (0 = legacy: 2 blocks, one per core)
     output wire [7:0] result,//result from core 0
     output wire done,//when high, gpu has finished
     output wire [2:0] debug_core_state,//for debuging , shows the internal state of each core
@@ -57,23 +58,33 @@ module gpu #(
     wire core_0_done, core_1_done;
     //infroms core which block of data it is processing
     wire [7:0] core_0_id, core_1_id;
+    wire core_0_blk_reset, core_1_blk_reset; // per-block core reset from the dispatcher
+    wire core_0_busy, core_1_busy;
+    wire [7:0] emit_block;                   // lowest unfinished block: owns the UART
 
-//dispatcher hands block 0 to core 0 and block 1 to core 1, and owns `done`
-//(high once BOTH cores have finished their block)
-    dispatcher #(
-        .TOTAL_BLOCKS(2)
-    ) main_dispatcher (
+//grid scheduler: hands out grid_dim blocks to whichever core is free, resets a
+//core between blocks, and owns `done` (high once every block has finished)
+    dispatcher main_dispatcher (
         .clk(clk),
         .reset(reset),
         .enable(enable),
+        .grid_dim(grid_dim),
         .core_0_done(core_0_done),
         .core_1_done(core_1_done),
+        .core_0_reset(core_0_blk_reset),
         .core_0_start(core_0_start),
-        .core_1_start(core_1_start),
         .core_0_id(core_0_id),
+        .core_1_reset(core_1_blk_reset),
+        .core_1_start(core_1_start),
         .core_1_id(core_1_id),
+        .core_0_busy(core_0_busy),
+        .core_1_busy(core_1_busy),
+        .emit_block(emit_block),
         .done(done)
     );
+
+    // The effective gridDim kernels read with GDIM (0 encodes the legacy 2)
+    wire [7:0] grid_dim_eff = (grid_dim == 8'd0) ? 8'd2 : grid_dim;
 
 
     wire [7:0] core_0_instruction_address; //program counter output channel of core 0
@@ -125,9 +136,10 @@ module gpu #(
         .BLOCK_DIM(BLOCK_DIM)
     ) compute_core_0 (
         .clk(clk),
-        .reset(reset),
+        .reset(reset || core_0_blk_reset),
         .start(core_0_start),
         .block_id(core_0_id),
+        .grid_dim(grid_dim_eff),
         .done(core_0_done),
 
         // NEW: Plug into the ROM!
@@ -162,9 +174,10 @@ module gpu #(
         .BLOCK_DIM(BLOCK_DIM)
     ) compute_core_1 (
         .clk(clk),
-        .reset(reset),
+        .reset(reset || core_1_blk_reset),
         .start(core_1_start),
         .block_id(core_1_id),
+        .grid_dim(grid_dim_eff),
         .done(core_1_done),
         .instruction_address(core_1_instruction_address),
         .current_instruction(current_instruction_1),
@@ -181,40 +194,27 @@ module gpu #(
     );
 
     // ------------------------------------------------------------------
-    // Emit path: stream each core's STR-to-63 bytes straight to the host.
+    // Emit path: stream the kernels' STR-to-63 bytes straight to the host.
     //
-    // Core 0 is served first; we switch to core 1 only once core 0 is
-    // terminally done (its scheduler's DONE state is sticky, so it can never
-    // emit again) and has no pending byte — so the handoff can't tear a byte.
-    // Forwarding core 1 afterward also drains its emits, letting its
-    // scheduler reach DONE.
+    // The UART belongs to the core running the lowest unfinished block
+    // (emit_block, from the dispatcher). A core running a later block stalls
+    // on its first emit until every earlier block has finished, so the reply
+    // is each block's bytes in blockIdx order, whichever core ran it. A
+    // block's last byte is always acked before its RET (an emit stalls the
+    // warp until acked), so ownership never moves mid-byte.
     //
-    // The reply is whatever the kernels emit, in core-0-then-core-1 order.
     // Kernels frame their own output (the demo convention is a 1-byte length
-    // followed by that many result bytes) so the host knows when each core's
-    // output ends. No cycle counts are appended.
+    // followed by that many result bytes) so the host knows where each
+    // block's output ends.
     // ------------------------------------------------------------------
-    localparam E_CORE0 = 2'd0, E_CORE1 = 2'd1, E_END = 2'd2;
-    reg [1:0] estate;
+    wire own_0 = core_0_busy && (core_0_id == emit_block);
+    wire own_1 = core_1_busy && (core_1_id == emit_block);
 
-    always @(posedge clk) begin
-        if (reset) begin
-            estate <= E_CORE0;
-        end else begin
-            case (estate)
-                E_CORE0: if (core_0_done && !c0_emit_valid) estate <= E_CORE1;
-                E_CORE1: if (core_1_done && !c1_emit_valid) estate <= E_END;
-                default: ;
-            endcase
-        end
-    end
-
-    assign emit_valid = (estate == E_CORE0) ? c0_emit_valid
-                      : (estate == E_CORE1) ? c1_emit_valid
-                      :                       1'b0;
-    assign emit_data  = (estate == E_CORE0) ? c0_emit_data
-                      :                       c1_emit_data;
-    assign c0_emit_ready = (estate == E_CORE0) && emit_ready;
-    assign c1_emit_ready = (estate == E_CORE1) && emit_ready;
+    assign emit_valid = own_0 ? c0_emit_valid
+                      : own_1 ? c1_emit_valid
+                      :         1'b0;
+    assign emit_data  = own_0 ? c0_emit_data : c1_emit_data;
+    assign c0_emit_ready = own_0 && emit_ready;
+    assign c1_emit_ready = own_1 && emit_ready;
 
 endmodule

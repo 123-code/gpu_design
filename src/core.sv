@@ -12,6 +12,7 @@ module core #(
     input wire reset,//reset signal
     input wire start,//cycle pulse from dispatcher, when 1, core begins execution
     input wire [7:0] block_id,//8 bit identfier, which block of data is this core processing
+    input wire [7:0] grid_dim,//blocks in the launch (%gridDim, read with GDIM)
     output wire done,//when 1, core has finished processing
 
 //dtata memory read (since multiple threads want to read simultaneously, read requests are serialized by arbiter)
@@ -438,6 +439,7 @@ module core #(
                     .reset(reset),
                     .enable(1'b1),
                     .block_id(block_id),
+                    .grid_dim(grid_dim),
                     .core_state(core_state),
                     .thread_active(active_mask[w][i]),
                     .warp_active(warp_active_flag),

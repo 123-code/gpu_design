@@ -236,6 +236,7 @@ module decoder #(
                         // rs field ([8:6]) selects the MOV variant:
                         //   0       plain MOV: load imm6
                         //   1/2/3   TID/BID/BDIM: copy identity reg R15/R13/R14 into rd
+                        //   5       GDIM: gridDim (blocks in the launch) into rd
                         //   4       LUI: Rd = (Rd<<6)|imm6 (point rs at Rd to read it)
                         case (instruction[8:6])
                             3'b000: ; // plain MOV, load immediate

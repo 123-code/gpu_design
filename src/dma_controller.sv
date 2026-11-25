@@ -28,6 +28,9 @@ module dma_controller #(
     output reg  [7:0]           instr_waddr,
     output reg  [15:0]          instr_wdata,
 
+    // ---- launch config: gridDim from the header (see S_HEADER_INSTR_H) ----
+    output reg  [7:0]           grid_dim,
+
     // ---- status: high while the DMA owns the write port ----
     output reg                  loading
 );
@@ -63,6 +66,7 @@ module dma_controller #(
             instr_waddr <= 8'd0;
             byte_toggle <= 1'b0;
             gpu_done_d <= 1'b0;
+            grid_dim   <= 8'd0;
         end else begin
             gpu_done_d <= gpu_done;
             gpu_start  <= 1'b0;          // 1-cycle pulse by default
@@ -84,7 +88,11 @@ module dma_controller #(
                 S_HEADER_INSTR_H: begin
                     loading <= 1'b1;
                     if (rx_valid) begin
-                        instr_size[15:8] <= rx_byte;
+                        // The program is at most 256 words, so instr_size only
+                        // needs bits [8:0]. Bits [15:9] carry the launch's
+                        // gridDim (0 = legacy: one block per core).
+                        instr_size[15:8] <= {7'd0, rx_byte[0]};
+                        grid_dim         <= {1'b0, rx_byte[7:1]};
                         state <= S_HEADER_DATA_L;
                     end
                 end

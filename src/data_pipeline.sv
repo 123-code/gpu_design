@@ -23,6 +23,7 @@ module data_pipeline #(
     input  wire                 gpu_done,     // GPU finished the previous payload
     output wire                 gpu_start,    // 1-cycle "payload ready, go"
     output wire                 loading,      // high while the DMA owns memory
+    output wire [7:0]           grid_dim,     // gridDim from the frame header
 
     // Instruction memory write ports (from DMA)
     output wire                 instr_we,
@@ -73,6 +74,7 @@ module data_pipeline #(
         .gpu_done(gpu_done), .gpu_start(gpu_start),
         .mem_we(dma_we), .mem_waddr(dma_waddr), .mem_wdata(dma_wdata),
         .instr_we(instr_we), .instr_waddr(instr_waddr), .instr_wdata(instr_wdata),
+        .grid_dim(grid_dim),
         .loading(loading)
     );
 

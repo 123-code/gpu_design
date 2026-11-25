@@ -6,7 +6,7 @@
 Streams the header-driven frame the current data_pipeline DMA expects (same
 protocol as test/tb_loadrun.sv):
 
-    header : instr_size (16-bit WORDS, LE) | data_size (bytes, LE)
+    header : instr_size (16-bit WORDS, LE; bits 15:9 = gridDim) | data_size (bytes, LE)
     program: each 16-bit word low byte then high byte
     data   : raw payload bytes (broadcast into BOTH cores' memory)
 
@@ -39,6 +39,7 @@ def main():
     port = PORT
     data_hex = None   # optional: read the data payload from a hex-byte file
     pad = 0           # optional: extra zero bytes to absorb the DMA final-byte drop
+    grid = 0          # optional: gridDim (blocks in the launch); 0 = one block per core
     # pull options
     rest = []
     i = 0
@@ -51,11 +52,13 @@ def main():
             data_hex = args[i + 1]; i += 2
         elif args[i] == "--pad":
             pad = int(args[i + 1]); i += 2
+        elif args[i] == "--grid":
+            grid = int(args[i + 1]); i += 2
         else:
             rest.append(args[i]); i += 1
 
     if not rest:
-        print("usage: send_kernel.py <kernel.hex> [d0,d1,...] [--data-hex F] [--pad N] [--read N] [--port DEV]")
+        print("usage: send_kernel.py <kernel.hex> [d0,d1,...] [--data-hex F] [--pad N] [--grid N] [--read N] [--port DEV]")
         sys.exit(2)
 
     kernel = rest[0]
@@ -71,7 +74,9 @@ def main():
     data_size = len(data)
 
     frame = bytearray()
-    frame += struct.pack("<H", instr_size)          # header: instr_size LE
+    # header word 0: instr_size in bits [8:0], gridDim in bits [15:9]
+    assert instr_size <= 256 and 0 <= grid <= 127
+    frame += struct.pack("<H", instr_size | (grid << 9))
     frame += struct.pack("<H", data_size)           #         data_size LE
     for w in prog:                                  # program: low byte then high byte
         frame += bytes([w & 0xFF, (w >> 8) & 0xFF])

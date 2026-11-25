@@ -105,6 +105,7 @@ impl Parser {
                     "tid" => return Ok(Expr::ThreadId(IdentityReg::Tid)),
                     "bid" => return Ok(Expr::ThreadId(IdentityReg::Bid)),
                     "bdim" => return Ok(Expr::ThreadId(IdentityReg::Bdim)),
+                    "gdim" => return Ok(Expr::ThreadId(IdentityReg::Gdim)),
                     _ => {}
                 }
                 if name == "max" && self.peek() == Some(&Token::OpenParen) {

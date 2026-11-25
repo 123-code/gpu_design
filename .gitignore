@@ -70,3 +70,4 @@ sim_jpp_features
 sim_mnist_jpp_full
 sim_raycast
 sim_hdmi
+sim_grid

@@ -59,6 +59,7 @@ module top #(
     wire sys_reset = !por_done || !pll_lock;
 
     // ---- Host-to-Device pipeline ----
+    wire [7:0]  grid_dim;             // blocks in the launch (frame header)
     wire        gpu_start, loading; // gpu start is high when the image was loaded loading is high while image is still loading from dma
     wire        instr_we;
     wire [7:0]  instr_waddr;
@@ -88,6 +89,7 @@ module top #(
         .gpu_done(done),              // GPU done -> DMA re-arms for next frame
         .gpu_start(gpu_start),
         .loading(loading),
+        .grid_dim(grid_dim),
         .instr_we(instr_we),
         .instr_waddr(instr_waddr),
         .instr_wdata(instr_wdata),
@@ -135,6 +137,7 @@ module top #(
         .clk(sys_clk),
         .reset(gpu_reset),
         .enable(gpu_enable),
+        .grid_dim(grid_dim),
         .result(result),
         .done(done),
         .debug_core_state(),

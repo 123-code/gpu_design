@@ -107,6 +107,8 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "TID" => vec![w(0b0010, reg(&toks[1]), 1, 0)],
         "BID" => vec![w(0b0010, reg(&toks[1]), 2, 0)],
         "BDIM" => vec![w(0b0010, reg(&toks[1]), 3, 0)],
+        // GDIM rd -> rd = gridDim (blocks in the launch, from the frame header)
+        "GDIM" => vec![w(0b0010, reg(&toks[1]), 5, 0)],
         // LUI Rd,#imm6 -> Rd = (Rd<<6)|imm6 (MOV-variant, rs field == 4).
         "LUI" => vec![w(0b0010, reg(&toks[1]), 4, imm(&toks[2]))],
         // LDI Rd,#imm16 (pseudo): load an arbitrary 16-bit constant with no scratch
