@@ -74,7 +74,15 @@ module decoder #(
     // STR with rd field bit 0)
     output reg decoded_shared,
     // BAR: block-wide barrier across the core's warps (RET with bit 1)
-    output reg decoded_bar
+    output reg decoded_bar,
+
+    // Tensor core (see tensor_core.sv). MMA/TCFG live in MACL's unused rd
+    // field, TLD/TLDQ in MAC's unused rs field.
+    output reg decoded_mma,        // MMA Ra,Rb,#tile,#acc
+    output reg decoded_tcfg,       // TCFG Rs
+    output reg decoded_tld,        // TLD Rd,#col,#half : rd <- TMEM row half
+    output reg decoded_tldq,       // TLDQ Rd,#col      : rd <- requantized row
+    output reg decoded_tc_op       // any of the above: needs the tensor core idle
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -141,6 +149,11 @@ module decoder #(
             decoded_sync <= 0;
             decoded_shared <= 0;
             decoded_bar <= 0;
+            decoded_mma <= 0;
+            decoded_tcfg <= 0;
+            decoded_tld <= 0;
+            decoded_tldq <= 0;
+            decoded_tc_op <= 0;
 
         end else begin
             // Only decode in the DECODE stage (4-bit state = 0011)
@@ -186,6 +199,11 @@ module decoder #(
                 decoded_sync <= 0;
                 decoded_shared <= 0;
                 decoded_bar <= 0;
+                decoded_mma <= 0;
+                decoded_tcfg <= 0;
+                decoded_tld <= 0;
+                decoded_tldq <= 0;
+                decoded_tc_op <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -273,16 +291,35 @@ module decoder #(
                         decoded_shared           <= instruction[5];
                     end
                     MACL: begin
-                        // Push rs into the MAC operand buffer (no register write)
-                        decoded_mac_load <= 1;
+                        // rd field (unused by MACL) selects:
+                        //   0  MACL  push rs into the MAC operand buffer
+                        //   1  MMA   tensor-core MMA: A at [rs], B at [rt]
+                        //            (shared memory), imm[4:3] TMEM tile,
+                        //            imm[5] accumulate
+                        //   2  TCFG  tensor-core config from rs
+                        case (instruction[11:9])
+                            3'b000: decoded_mac_load <= 1;
+                            3'b001: begin decoded_mma  <= 1; decoded_tc_op <= 1; end
+                            3'b010: begin decoded_tcfg <= 1; decoded_tc_op <= 1; end
+                            default: ;
+                        endcase
                     end
                     MAC: begin
-                        // Fire the MAC and write the selected byte of its 32-bit
-                        // result into rd. instruction[1:0] picks the byte
-                        // (MAC Rd,#n); bare MAC Rd encodes #0 = low byte.
+                        // rs field (unused by MAC) selects:
+                        //   0  MAC Rd,#n   fire the MAC, write byte n of its
+                        //                  32-bit result (bare MAC Rd = #0)
+                        //   1  TLD Rd,#c,#h  rd <- half h of TMEM column c,
+                        //                  row = this lane
+                        //   2  TLDQ Rd,#c   rd <- clamp(row >>> qshift, 0, 255)
                         decoded_reg_write_enable <= 1;
-                        decoded_reg_input_mux    <= MUX_MAC;
-                        decoded_mac_byte         <= instruction[1:0];
+                        case (instruction[8:6])
+                            3'b001: begin decoded_tld  <= 1; decoded_tc_op <= 1; end
+                            3'b010: begin decoded_tldq <= 1; decoded_tc_op <= 1; end
+                            default: begin
+                                decoded_reg_input_mux <= MUX_MAC;
+                                decoded_mac_byte      <= instruction[1:0];
+                            end
+                        endcase
                     end
                     BRn: begin
                         // Branch: tell pc.sv to route the jump target into the PC

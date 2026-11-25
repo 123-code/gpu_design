@@ -40,6 +40,10 @@ module registers #(
     // so rs holds the old Rd -> this shifts in 6 fresh low bits per LUI.
     input wire decoded_lui,
 
+    // TLD/TLDQ: when high, write this lane's tensor-memory value into rd
+    input wire decoded_tc_read,
+    input wire [DATA_BITS-1:0] tc_data,
+
     // ==========================================
     // PART 3: DATA PINS IN (Wires bringing answers back)
     // ==========================================
@@ -125,6 +129,8 @@ module registers #(
                             4'd5: registers[decoded_rd_address] <= {{(DATA_BITS-8){1'b0}}, grid_dim}; // GDIM -> gridDim
                             default: registers[decoded_rd_address] <= registers[15];
                         endcase
+                    end else if (decoded_tc_read) begin
+                        registers[decoded_rd_address] <= tc_data;    // TLD / TLDQ
                     end else if (decoded_lui) begin
                         // LUI: shift old Rd (latched into rs) up 6 and OR in imm6.
                         registers[decoded_rd_address] <= (rs << 6) | decoded_immediate[5:0];

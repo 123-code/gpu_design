@@ -19,6 +19,11 @@ module scheduler #(
     // Divergence signals
     input wire decoded_sync,
     input wire decoded_bar,
+
+    // Tensor core: an MMA/TCFG/TLD/TLDQ issued while the unit is busy parks
+    // the warp (it yields) and re-executes once the unit is idle.
+    input wire decoded_tc_op,
+    input wire tc_busy,
     input wire decoded_pc_mux,
     input wire [7:0] decoded_immediate,
     input wire [THREADS_PER_BLOCK-1:0] branch_votes,
@@ -59,6 +64,7 @@ module scheduler #(
         end
     endgenerate
     reg [1:0] warp_status [WARPS_PER_CORE-1:0];
+    reg [WARPS_PER_CORE-1:0] tc_parked;   // waiting for the tensor core
 
     // Divergence Stacks (Per Warp), SDEPTH reconvergence levels each.
     //
@@ -84,6 +90,7 @@ module scheduler #(
             core_state <= IDLE;
             done <= 0;
             current_warp <= 0;
+            tc_parked <= '0;
             for (integer w = 0; w < WARPS_PER_CORE; w = w + 1) begin
                 warp_pc[w] <= 0;
                 stack_ptr[w*2 +: 2] <= 2'b0;
@@ -119,9 +126,12 @@ module scheduler #(
                     if (lsu_state[w][i] == 2'b01) warp_issuing[w] = 1;
                 end
                 
-                // Wake up if it was waiting and LSU is done
-                if (warp_status[w] == WARP_WAITING && !warp_is_waiting[w]) begin
+                // Wake up if it was waiting and LSU is done (and, if it is
+                // parked on the tensor core, the unit is idle)
+                if (warp_status[w] == WARP_WAITING && !warp_is_waiting[w]
+                        && !(tc_parked[w] && tc_busy)) begin
                     warp_status[w] <= WARP_READY;
+                    tc_parked[w]   <= 1'b0;
                 end
             end
 
@@ -175,7 +185,15 @@ module scheduler #(
                 // is idle), and rs/rt latched this cycle are valid next cycle, so
                 // jump straight to EXECUTE: 7 cycles -> 6 (~1.17x). Memory ops
                 // (LDR/STR/emit) still need WAIT for the LSU handshake.
-                core_state <= decoded_mem_op ? WAIT : EXECUTE;
+                if (decoded_tc_op && tc_busy) begin
+                    // Tensor core busy (an earlier async MMA): park and retry.
+                    // The PC has not moved, so the warp re-fetches this
+                    // instruction when it wakes.
+                    warp_status[current_warp] <= WARP_WAITING;
+                    tc_parked[current_warp]   <= 1'b1;
+                    core_state <= SELECT_WARP;
+                end else
+                    core_state <= decoded_mem_op ? WAIT : EXECUTE;
             end
             WAIT: begin //checking if the threads are busy, checks if threads are reading, writing to RAM
                 if (warp_emit[current_warp]) begin

@@ -84,6 +84,8 @@ module core #(
     wire decoded_sync; // NEW
     wire decoded_shared;   // LDS/STS
     wire decoded_bar;      // BAR
+    wire decoded_mma, decoded_tcfg, decoded_tld, decoded_tldq, decoded_tc_op;
+    wire tc_busy;
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
     
     wire current_warp;
@@ -134,6 +136,11 @@ module core #(
         .decoded_sync(decoded_sync),
         .decoded_shared(decoded_shared),
         .decoded_bar(decoded_bar),
+        .decoded_mma(decoded_mma),
+        .decoded_tcfg(decoded_tcfg),
+        .decoded_tld(decoded_tld),
+        .decoded_tldq(decoded_tldq),
+        .decoded_tc_op(decoded_tc_op),
         .decoded_mac_byte(decoded_mac_byte)
     );
 
@@ -153,6 +160,8 @@ module core #(
         
         .decoded_sync(decoded_sync),
         .decoded_bar(decoded_bar),
+        .decoded_tc_op(decoded_tc_op),
+        .tc_busy(tc_busy),
         .decoded_pc_mux(decoded_pc_mux),
         .decoded_immediate(decoded_immediate[7:0]), // branch target is PC-domain (8-bit)
         .branch_votes(branch_votes),
@@ -300,8 +309,6 @@ module core #(
     // (the arbiter stops accepting new requests as soon as it asks).
     assign sh_rd_gnt = sh_rd_hold && !arb_sh_busy;
     assign sh_raddr  = sh_rd_gnt ? unit_sh_raddr : arb_sh_raddr;
-    assign sh_rd_hold    = 1'b0;    // no other reader yet
-    assign unit_sh_raddr = 8'd0;
 
     lsu_write_arbiter #(
         .THREADS(WARPS_PER_CORE * THREADS_PER_BLOCK),
@@ -453,6 +460,49 @@ module core #(
     // unchanged: software still pulls the 32-bit MAC result out one byte at a time).
     wire [DATA_BITS-1:0] mac_result_ext = {{(DATA_BITS-8){1'b0}}, mac_or_fc_result};
 
+    // ==========================================
+    // TENSOR CORE + TMEM (shared, core-level)
+    // ==========================================
+    // MMA operands are shared-memory ADDRESSES in thread 0's rs/rt (uniform
+    // across the warp, like a tcgen05 descriptor); the result lands in TMEM.
+    // The unit borrows the shared-memory read port while it stages A and B.
+    wire [127:0] tld_data;
+    wire [4:0]   tc_qshift;
+    tensor_core #(.TMEM_COLS(16)) u_tc (
+        .clk(clk),
+        .reset(reset),
+        .start(decoded_mma && core_state == UPDATE_STATE),
+        .a_addr(rs_bus[current_warp][0][9:0]),
+        .b_addr(rt_bus[current_warp][0][9:0]),
+        .d_tile(decoded_immediate[4:3]),
+        .accumulate(decoded_immediate[5]),
+        .cfg_we(decoded_tcfg && core_state == UPDATE_STATE),
+        .cfg_data(rs_bus[current_warp][0]),
+        .busy(tc_busy),
+        .sh_req(sh_rd_hold),
+        .sh_gnt(sh_rd_gnt),
+        .sh_raddr(unit_sh_raddr),
+        .sh_rdata(sh_rdata),
+        .tld_col(decoded_immediate[5:2]),
+        .tld_data(tld_data),
+        .qshift(tc_qshift)
+    );
+
+    // Per-lane TLD/TLDQ value: lane i reads TMEM row i (rows 0..3; lanes
+    // past the tile read 0).
+    wire [DATA_BITS-1:0] tc_lane [THREADS_PER_BLOCK-1:0];
+    genvar tl;
+    generate
+        for (tl = 0; tl < THREADS_PER_BLOCK; tl = tl + 1) begin : tc_lanes
+            wire signed [31:0] row = (tl < 4) ? tld_data[(tl % 4)*32 +: 32] : 32'sd0;
+            wire signed [31:0] q   = row >>> tc_qshift;
+            wire [7:0] q8 = q[31] ? 8'd0 : (|q[30:8]) ? 8'd255 : q[7:0];
+            assign tc_lane[tl] = decoded_tldq          ? {{(DATA_BITS-8){1'b0}}, q8}
+                               : decoded_immediate[0]  ? row[31:16]
+                               :                         row[15:0];
+        end
+    endgenerate
+
     genvar w, i;
     generate
         // Shared ALUs across all warps (Time-multiplexed execution units)
@@ -512,6 +562,8 @@ module core #(
                     .rt(rt_bus[w][i]),
 
                     .mac_result(mac_result_ext),
+                    .decoded_tc_read(decoded_tld || decoded_tldq),
+                    .tc_data(tc_lane[i]),
                     .debug_reg3(reg3_bus[w][i])
                 );
 

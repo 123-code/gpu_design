@@ -11,6 +11,7 @@ drive each one and the testbench that proves it.
 |---|---|---|
 | [Grid scheduling](#grid-scheduling) | CTA scheduler, `gridDim` | `make sim-grid` |
 | [Shared memory + barrier](#shared-memory--barrier) | `__shared__`, `__syncthreads()` | `make sim-smem` |
+| [Tensor core + TMEM](#tensor-core--tmem) | 5th-gen tensor core, `tcgen05.mma` / `.ld`, Tensor Memory | `make sim-mma` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -84,6 +85,53 @@ threads 3 and 7 belongs to the other warp. All 16 lanes (2 cores x 8) must
 read the right value. The same kernel without the `BAR` is the negative
 control and must get lanes wrong. It does (2 of 16): the scheduler favours
 warp 0, which reads warp 1's slots before warp 1 has written them.
+
+---
+
+## Tensor core + TMEM
+
+The old MAC units (`vector_mac`, `fc_mac`) are a dot-product engine driven
+by thread 0, with the accumulator in a register. A Blackwell tensor core
+works differently, and `src/tensor_core.sv` copies the three parts that
+matter:
+
+1. **Operands come from shared memory, by address.** `MMA Ra, Rb, ...`
+   passes the *shared-memory addresses* of A and B in two registers, the
+   way a `tcgen05.mma` passes smem descriptors. The unit fetches the tiles
+   itself, borrowing the shared-memory read port from the thread LSUs (the
+   read arbiter holds off new requests, the unit takes the port once no LSU
+   shared read is in flight).
+2. **The accumulator lives in Tensor Memory, not in registers.** TMEM is a
+   per-core 16 x 128-bit array: 16 columns of 4 rows x int32, i.e. four 4x4
+   D tiles. `TLD` copies a column out to the threads, lane i getting row i,
+   the way `tcgen05.ld` gives each thread its own TMEM lane.
+3. **MMA is asynchronous.** The issuing warp keeps running. Only another
+   tensor-core instruction waits for the unit: if it is busy, the warp parks
+   (other warps run) and re-executes the instruction when the unit is idle.
+
+One MMA is `D (+)= A x B` on a 4x4 tile with K = 4: A is 4 x K row-major
+(row i = one 32-bit word), B is K x 4 stored K-major (column j = one word),
+the layout `tcgen05` uses for smem operands.
+
+| Instruction | Encoding | Meaning |
+|---|---|---|
+| `MMA Ra, Rb, #t, #acc` | `MACL`, rd field 1 | TMEM tile t (0..3) = (acc ? D : 0) + A[Ra] x B[Rb] |
+| `TCFG Rs` | `MACL`, rd field 2 | kind = Rs[2:0], `TLDQ` shift = Rs[7:3] |
+| `TLD Rd, #c, #h` | `MAC`, rs field 1 | Rd = low (h=0) / high (h=1) half of this lane's row of TMEM column c |
+| `TLDQ Rd, #c` | `MAC`, rs field 2 | Rd = clamp(row >>> shift, 0, 255): requantize + ReLU on the way out |
+
+Timing: 8 pipelined shared-memory reads stage A and B, then 5 cycles per
+output column (four 4-wide dot products and one 128-bit TMEM write). About
+30 cycles for 64 MACs, on 4 multipliers.
+
+`make sim-mma` uses `software/gen_mma_test.py` to build a kernel and random
+operands, and `software/tc_ref.py` (the bit-exact model) to compute the
+expected bytes. The kernel copies the operands into shared memory, runs
+three MMAs (overwrite, accumulate onto the same tile while the unit is still
+busy with the first, overwrite a second tile), and reads both tiles back
+with `TLD` and tile 0 with `TLDQ`. All 144 result bytes must match on both
+cores. The test was checked against two planted bugs (a wrong expected byte,
+`accumulate` forced off); both fail it.
 
 ---
 

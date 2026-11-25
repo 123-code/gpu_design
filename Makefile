@@ -6,12 +6,12 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: regress regress-full sim-grid sim-smem mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full sim-grid sim-smem sim-mma mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Regression: every self-checking testbench that runs in a few seconds.
 # regress-full adds the minute-scale end-to-end sims and a short fuzz.
 REGRESS = sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp \
-          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem
+          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma
 REGRESS_FULL = $(REGRESS) sim-mlp2 sim-mnist-jpp-full sim-raycast sim-hdmi
 regress:        ## Run the fast self-checking testbenches; stops at the first FAIL
 	@python3 test/regress.py $(REGRESS)
@@ -213,3 +213,11 @@ sim-smem:       ## Shared memory (LDS/STS) + BAR: lanes read neighbours across w
 	cd software && cargo run --quiet -- smem_nobar_kernel.asm smem_nobar_kernel.hex > /dev/null
 	$(IVERILOG) -g2012 -s tb -o sim_smem test/tb_smem.sv src/*.sv
 	$(VVP) sim_smem
+
+MMA_KIND ?= s8
+sim-mma:        ## Tensor core: 3 MMAs into TMEM + TLD/TLDQ readback vs the bit-exact model. MMA_KIND=s8
+	mkdir -p software/build
+	cd software && python3 gen_mma_test.py $(MMA_KIND) --out build/mma_$(MMA_KIND) > /dev/null
+	cd software && cargo run --quiet -- build/mma_$(MMA_KIND).asm build/mma_$(MMA_KIND).hex > /dev/null
+	$(IVERILOG) -g2012 -s tb -o sim_mma test/tb_mma.sv src/*.sv
+	$(VVP) sim_mma +prefix=software/build/mma_$(MMA_KIND)

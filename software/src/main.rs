@@ -133,6 +133,22 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         // MAC Rd, #n   -> write byte n (0..3) — read the full 32-bit result in 4 ops
         "MAC" => vec![w(0b0111, reg(&toks[1]), 0,
                         toks.get(2).map_or(0, |t| imm(t) & 0b11))],
+
+        // ---- tensor core (see src/tensor_core.sv) ----
+        // MMA Ra, Rb, #tile, #acc : TMEM tile (0..3) (+)= A x B, with A and B
+        // at the shared-memory byte addresses in Ra / Rb. Async: the warp
+        // keeps going; the next tensor-core instruction waits for the unit.
+        // MACL opcode, rd field = 1, imm[5] = acc, imm[4:3] = tile, rt = Rb.
+        "MMA" => vec![w(0b0110, 1, reg(&toks[1]),
+                        ((imm(&toks[4]) & 1) << 5) | ((imm(&toks[3]) & 3) << 3) | (reg(&toks[2]) & 7))],
+        // TCFG Rs : kind = Rs[2:0], TLDQ shift = Rs[7:3]. MACL rd field = 2.
+        "TCFG" => vec![w(0b0110, 2, reg(&toks[1]), 0)],
+        // TLD Rd, #col, #half : Rd = low (0) / high (1) 16 bits of this lane's
+        // row of TMEM column col (0..15). MAC opcode, rs field = 1.
+        "TLD" => vec![w(0b0111, reg(&toks[1]), 1,
+                        ((imm(&toks[2]) & 15) << 2) | (imm(&toks[3]) & 1))],
+        // TLDQ Rd, #col : Rd = clamp(row >>> qshift, 0, 255). rs field = 2.
+        "TLDQ" => vec![w(0b0111, reg(&toks[1]), 2, (imm(&toks[2]) & 15) << 2)],
         // Branch family: opcode 1000, condition mask N/Z/P in [11:9], 8-bit target
         // in [7:0]. pc.sv branches when (saved_nzp & mask) != 0. CMP sets
         // N=(a<b), Z=(a==b), P=(a>b), so after any CMP exactly one flag is set and
