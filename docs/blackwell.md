@@ -584,8 +584,9 @@ The worst path in that build was the grid dispatcher's in-order retirement
 (block offset, a variable-length drain and the issue window, all
 combinational). The dispatcher now retires at most one block per cycle into
 a registered window, which removes that path; blocks take thousands of
-cycles, so nothing is lost. A build with that change was still running when
-this was written.
+cycles, so nothing is lost. The rebuild with that change did not get through
+placement inside this environment's job time limit, so whether it now makes
+54 MHz is unmeasured: run the script again to find out.
 
 For comparison, everything on (2 x 9 lanes, all MMA kinds, L1s, SDRAM,
 link) synthesizes to ~71.5k LUT4 + 18.7k ALU, about 4x the chip; with every
