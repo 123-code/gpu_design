@@ -91,7 +91,12 @@ module decoder #(
 
     // LDG/STG: the load/store addresses global (SDRAM) memory through the L1
     // (LDR with imm bit 4, STR with rd field bit 1)
-    output reg decoded_global
+    output reg decoded_global,
+
+    // Clusters: CBAR = barrier across both blocks of the pair (0xF008);
+    // MMA2 = tensor-core MMA with B split across the pair (MACL rd field 3)
+    output reg decoded_cbar,
+    output reg decoded_mma2
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -167,6 +172,8 @@ module decoder #(
             decoded_tmawait <= 0;
             decoded_tma_global <= 0;
             decoded_global <= 0;
+            decoded_cbar <= 0;
+            decoded_mma2 <= 0;
 
         end else begin
             // Only decode in the DECODE stage (4-bit state = 0011)
@@ -221,6 +228,8 @@ module decoder #(
                 decoded_tmawait <= 0;
                 decoded_tma_global <= 0;
                 decoded_global <= 0;
+                decoded_cbar <= 0;
+                decoded_mma2 <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -282,6 +291,7 @@ module decoder #(
                         //   0       plain MOV: load imm6
                         //   1/2/3   TID/BID/BDIM: copy identity reg R15/R13/R14 into rd
                         //   5       GDIM: gridDim (blocks in the launch) into rd
+                        //   6       CRANK: rank in the cluster pair (0/1) into rd
                         //   4       LUI: Rd = (Rd<<6)|imm6 (point rs at Rd to read it)
                         case (instruction[8:6])
                             3'b000: ; // plain MOV, load immediate
@@ -320,6 +330,7 @@ module decoder #(
                             3'b000: decoded_mac_load <= 1;
                             3'b001: begin decoded_mma  <= 1; decoded_tc_op <= 1; end
                             3'b010: begin decoded_tcfg <= 1; decoded_tc_op <= 1; end
+                            3'b011: begin decoded_mma <= 1; decoded_mma2 <= 1; decoded_tc_op <= 1; end
                             default: ;
                         endcase
                     end
@@ -379,6 +390,9 @@ module decoder #(
                             decoded_bar <= 1;             // BAR (0xF002)
                         end else if (instruction[2] == 1'b1) begin
                             decoded_tmawait <= 1;         // TMAWAIT (0xF004)
+                        end else if (instruction[3] == 1'b1) begin
+                            decoded_bar  <= 1;            // CBAR (0xF008): a BAR that
+                            decoded_cbar <= 1;            // also waits for the peer block
                         end else begin
                             decoded_ret <= 1;                     
                         end

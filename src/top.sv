@@ -76,6 +76,7 @@ module top #(
 
     // ---- Host-to-Device pipeline ----
     wire [7:0]  grid_dim;             // blocks in the launch (frame header)
+    wire        cluster;              // cluster launch (frame header)
     wire        dma_g_we;             // a payload byte for global memory
     wire [12:0] dma_g_addr;
     wire [7:0]  dma_g_data;
@@ -115,6 +116,7 @@ module top #(
         .gpu_start(gpu_start),
         .loading(loading),
         .grid_dim(grid_dim),
+        .cluster(cluster),
         .dma_g_we(dma_g_we),
         .dma_g_addr(dma_g_addr),
         .dma_g_data(dma_g_data),
@@ -166,6 +168,7 @@ module top #(
         .reset(gpu_reset),
         .enable(gpu_enable),
         .grid_dim(grid_dim),
+        .cluster(cluster),
         .result(result),
         .done(done),
         .debug_core_state(),

@@ -109,6 +109,8 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "BDIM" => vec![w(0b0010, reg(&toks[1]), 3, 0)],
         // GDIM rd -> rd = gridDim (blocks in the launch, from the frame header)
         "GDIM" => vec![w(0b0010, reg(&toks[1]), 5, 0)],
+        // CRANK rd -> rd = rank in the cluster pair (0/1; 0 outside a cluster launch)
+        "CRANK" => vec![w(0b0010, reg(&toks[1]), 6, 0)],
         // LUI Rd,#imm6 -> Rd = (Rd<<6)|imm6 (MOV-variant, rs field == 4).
         "LUI" => vec![w(0b0010, reg(&toks[1]), 4, imm(&toks[2]))],
         // LDI Rd,#imm16 (pseudo): load an arbitrary 16-bit constant with no scratch
@@ -146,6 +148,11 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
                         ((imm(&toks[4]) & 1) << 5) | ((imm(&toks[3]) & 3) << 3) | (reg(&toks[2]) & 7))],
         // TCFG Rs : kind = Rs[2:0], TLDQ shift = Rs[7:3]. MACL rd field = 2.
         "TCFG" => vec![w(0b0110, 2, reg(&toks[1]), 0)],
+        // MMA2 Ra, Rb, #tile, #acc : 2-SM MMA in a cluster launch. B's columns
+        // 0..3 are in rank 0's shared memory, 4..7 in rank 1's (same address);
+        // D (4x8) lands in TMEM tiles tile and tile+1. MACL rd field = 3.
+        "MMA2" => vec![w(0b0110, 3, reg(&toks[1]),
+                        ((imm(&toks[4]) & 1) << 5) | ((imm(&toks[3]) & 3) << 3) | (reg(&toks[2]) & 7))],
         // TLD Rd, #col, #half : Rd = low (0) / high (1) 16 bits of this lane's
         // row of TMEM column col (0..15). MAC opcode, rs field = 1.
         "TLD" => vec![w(0b0111, reg(&toks[1]), 1,
@@ -195,6 +202,8 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         "BAR" => vec![0xF002],
         // TMAWAIT: park until every TMA this core issued has landed.
         "TMAWAIT" => vec![0xF004],
+        // CBAR: barrier across both blocks of a cluster pair (BAR outside one).
+        "CBAR" => vec![0xF008],
 
         // ---- FC-MAC + argmax coprocessor (opcode 0000, sub-fn in [5:4]) ----
         "FRST" => vec![0x0000],                                   // [5:4]=00 reset engine

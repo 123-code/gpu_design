@@ -18,6 +18,7 @@ module gpu #(
     input wire reset,//reset signal, clears internal states to 0
     input wire enable,//when on, gpu issues thread blocks
     input wire [7:0] grid_dim,//blocks in this launch (0 = legacy: 2 blocks, one per core)
+    input wire cluster,//cluster launch: blocks 2k, 2k+1 co-scheduled as a pair
     output wire [7:0] result,//result from core 0
     output wire done,//when high, gpu has finished
     output wire [2:0] debug_core_state,//for debuging , shows the internal state of each core
@@ -89,6 +90,7 @@ module gpu #(
         .reset(reset),
         .enable(enable),
         .grid_dim(grid_dim),
+        .cluster(cluster),
         .core_0_done(core_0_done),
         .core_1_done(core_1_done),
         .core_0_reset(core_0_blk_reset),
@@ -102,6 +104,16 @@ module gpu #(
         .emit_block(emit_block),
         .done(done)
     );
+
+    // ---- the cluster link between the two cores: distributed shared memory
+    //      (each core's loads/stores into the other's), the cluster barrier ----
+    wire        c0_arr, c1_arr;
+    wire        c0_pr_req, c1_pr_req, c0_pr_ack, c1_pr_ack;
+    wire [7:0]  c0_pr_addr, c1_pr_addr;
+    wire [31:0] c0_pr_data, c1_pr_data;
+    wire        c0_pw_req, c1_pw_req, c0_pw_ack, c1_pw_ack;
+    wire [9:0]  c0_pw_addr, c1_pw_addr;
+    wire [15:0] c0_pw_data, c1_pw_data;
 
     // The effective gridDim kernels read with GDIM (0 encodes the legacy 2)
     wire [7:0] grid_dim_eff = (grid_dim == 8'd0) ? 8'd2 : grid_dim;
@@ -161,6 +173,11 @@ module gpu #(
         .block_id(core_0_id),
         .grid_dim(grid_dim_eff),
         .done(core_0_done),
+        .cluster_mode(cluster), .peer_arrived(c1_arr), .cbar_arrived(c0_arr),
+        .pr_req(c0_pr_req), .pr_addr(c0_pr_addr), .pr_ack(c0_pr_ack), .pr_data(c0_pr_data),
+        .xr_req(c1_pr_req), .xr_addr(c1_pr_addr), .xr_ack(c1_pr_ack), .xr_data(c1_pr_data),
+        .pw_req(c0_pw_req), .pw_addr(c0_pw_addr), .pw_data(c0_pw_data), .pw_ack(c0_pw_ack),
+        .xw_req(c1_pw_req), .xw_addr(c1_pw_addr), .xw_data(c1_pw_data), .xw_ack(c1_pw_ack),
 
         // NEW: Plug into the ROM!
         .instruction_address(core_0_instruction_address),
@@ -201,6 +218,11 @@ module gpu #(
         .block_id(core_1_id),
         .grid_dim(grid_dim_eff),
         .done(core_1_done),
+        .cluster_mode(cluster), .peer_arrived(c0_arr), .cbar_arrived(c1_arr),
+        .pr_req(c1_pr_req), .pr_addr(c1_pr_addr), .pr_ack(c1_pr_ack), .pr_data(c1_pr_data),
+        .xr_req(c0_pr_req), .xr_addr(c0_pr_addr), .xr_ack(c0_pr_ack), .xr_data(c0_pr_data),
+        .pw_req(c1_pw_req), .pw_addr(c1_pw_addr), .pw_data(c1_pw_data), .pw_ack(c1_pw_ack),
+        .xw_req(c0_pw_req), .xw_addr(c0_pw_addr), .xw_data(c0_pw_data), .xw_ack(c0_pw_ack),
         .instruction_address(core_1_instruction_address),
         .current_instruction(current_instruction_1),
         .g_req(g1_req), .g_we(g1_we), .g_addr(g1_addr), .g_wdata(g1_wdata), .g_wbe(g1_wbe),

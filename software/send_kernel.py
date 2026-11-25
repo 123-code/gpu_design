@@ -41,6 +41,7 @@ def main():
     pad = 0           # optional: extra zero bytes to absorb the DMA final-byte drop
     grid = 0          # optional: gridDim (blocks in the launch); 0 = one block per core
     to_global = False # optional: payload goes to global memory (SDRAM), not data memory
+    cluster = False   # optional: cluster launch (blocks 2k, 2k+1 co-scheduled as pairs)
     # pull options
     rest = []
     i = 0
@@ -57,11 +58,13 @@ def main():
             grid = int(args[i + 1]); i += 2
         elif args[i] == "--global":
             to_global = True; i += 1
+        elif args[i] == "--cluster":
+            cluster = True; i += 1
         else:
             rest.append(args[i]); i += 1
 
     if not rest:
-        print("usage: send_kernel.py <kernel.hex> [d0,d1,...] [--data-hex F] [--pad N] [--grid N] [--global] [--read N] [--port DEV]")
+        print("usage: send_kernel.py <kernel.hex> [d0,d1,...] [--data-hex F] [--pad N] [--grid N] [--global] [--cluster] [--read N] [--port DEV]")
         sys.exit(2)
 
     kernel = rest[0]
@@ -81,7 +84,9 @@ def main():
     assert instr_size <= 256 and 0 <= grid <= 127
     frame += struct.pack("<H", instr_size | (grid << 9))
     # header word 1: data_size, bit 15 = payload to global memory
-    frame += struct.pack("<H", data_size | (0x8000 if to_global else 0))
+    # header word 1: data_size, bit 15 = payload to global memory,
+    # bit 14 = cluster launch
+    frame += struct.pack("<H", data_size | (0x8000 if to_global else 0) | (0x4000 if cluster else 0))
     for w in prog:                                  # program: low byte then high byte
         frame += bytes([w & 0xFF, (w >> 8) & 0xFF])
     frame += data                                   # data payload

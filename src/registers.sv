@@ -17,6 +17,7 @@ module registers #(
 
     input wire [7:0] block_id,    // Passed down from the Dispatcher
     input wire [7:0] grid_dim,    // blocks in the launch (%gridDim)
+    input wire       cluster_rank, // rank in the cluster pair (%cluster_ctarank)
     input wire [3:0] core_state,  // Passed down from the Scheduler (4-bit)
     input wire thread_active,                      // From Stage 1: Thread-level masking
     input wire warp_active,                        // NEW: Warp-level maskingwake?
@@ -127,6 +128,7 @@ module registers #(
                             4'd2: registers[decoded_rd_address] <= registers[13]; // BID  -> blockIdx
                             4'd3: registers[decoded_rd_address] <= registers[14]; // BDIM -> blockDim
                             4'd5: registers[decoded_rd_address] <= {{(DATA_BITS-8){1'b0}}, grid_dim}; // GDIM -> gridDim
+                            4'd6: registers[decoded_rd_address] <= {{(DATA_BITS-1){1'b0}}, cluster_rank}; // CRANK
                             default: registers[decoded_rd_address] <= registers[15];
                         endcase
                     end else if (decoded_tc_read) begin

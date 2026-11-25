@@ -33,6 +33,7 @@ module dispatcher #(
     input  wire       reset,
     input  wire       enable,
     input  wire [7:0] grid_dim,          // blocks in this launch (0 = legacy 2)
+    input  wire       cluster,           // cluster launch: blocks 2k/2k+1 run together
 
     input  wire       core_0_done,       // sticky level from core 0's scheduler
     input  wire       core_1_done,       // sticky level from core 1's scheduler
@@ -108,7 +109,28 @@ module dispatcher #(
 
             // Issue: at most one block per cycle, core 0 first. A core is free
             // when it is not busy (or is retiring right now).
-            if (can_issue && (!core_0_busy || retire_0) && !pending_start[0]) begin
+            //
+            // Cluster launch: blocks 2k and 2k+1 form a pair and must be
+            // co-resident (they share shared memory and barriers), so they
+            // are issued together -- 2k to core 0, 2k+1 to core 1 -- only
+            // when both cores are free. The rank is blockIdx & 1.
+            if (cluster) begin
+                if (can_issue && (!core_0_busy || retire_0) && (!core_1_busy || retire_1)
+                        && pending_start == 2'b00) begin
+                    core_0_id        <= next_block;
+                    core_0_busy      <= 1'b1;
+                    core_0_reset     <= 1'b1;
+                    pending_start[0] <= 1'b1;
+                    if (next_block + 8'd1 < total) begin
+                        core_1_id        <= next_block + 8'd1;
+                        core_1_busy      <= 1'b1;
+                        core_1_reset     <= 1'b1;
+                        pending_start[1] <= 1'b1;
+                        next_block       <= next_block + 8'd2;
+                    end else
+                        next_block       <= next_block + 8'd1;
+                end
+            end else if (can_issue && (!core_0_busy || retire_0) && !pending_start[0]) begin
                 core_0_id        <= next_block;
                 core_0_busy      <= 1'b1;
                 core_0_reset     <= 1'b1;

@@ -13,6 +13,31 @@ module core #(
     input wire start,//cycle pulse from dispatcher, when 1, core begins execution
     input wire [7:0] block_id,//8 bit identfier, which block of data is this core processing
     input wire [7:0] grid_dim,//blocks in the launch (%gridDim, read with GDIM)
+
+    // ---- cluster (the other core, when the launch pairs blocks) ----
+    input  wire        cluster_mode,
+    input  wire        peer_arrived,     // peer parked at its CBAR
+    output wire        cbar_arrived,
+    // our loads from the peer's shared memory (req held until ack)
+    output wire        pr_req,
+    output wire [7:0]  pr_addr,
+    input  wire        pr_ack,
+    input  wire [31:0] pr_data,
+    // the peer's loads from ours
+    input  wire        xr_req,
+    input  wire [7:0]  xr_addr,
+    output reg         xr_ack,
+    output wire [31:0] xr_data,
+    // our stores into the peer's shared memory (taken the same cycle)
+    output wire        pw_req,
+    output wire [9:0]  pw_addr,
+    output wire [15:0] pw_data,
+    input  wire        pw_ack,
+    // the peer's stores into ours
+    input  wire        xw_req,
+    input  wire [9:0]  xw_addr,
+    input  wire [15:0] xw_data,
+    output wire        xw_ack,
     output wire done,//when 1, core has finished processing
 
 //dtata memory read (since multiple threads want to read simultaneously, read requests are serialized by arbiter)
@@ -99,6 +124,7 @@ module core #(
     wire tc_busy;
     wire decoded_tma, decoded_tmawait, decoded_tma_global;
     wire decoded_global;   // LDG/STG
+    wire decoded_cbar, decoded_mma2;
     wire tma_busy;
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
     
@@ -159,6 +185,8 @@ module core #(
         .decoded_tmawait(decoded_tmawait),
         .decoded_tma_global(decoded_tma_global),
         .decoded_global(decoded_global),
+        .decoded_cbar(decoded_cbar),
+        .decoded_mma2(decoded_mma2),
         .decoded_mac_byte(decoded_mac_byte)
     );
 
@@ -178,6 +206,10 @@ module core #(
         
         .decoded_sync(decoded_sync),
         .decoded_bar(decoded_bar),
+        .decoded_cbar(decoded_cbar),
+        .cluster_mode(cluster_mode),
+        .peer_arrived(peer_arrived),
+        .cbar_arrived(cbar_arrived),
         .decoded_tc_op(decoded_tc_op),
         .tc_busy(tc_busy),
         .decoded_tma_op(decoded_tma || decoded_tmawait),
@@ -398,7 +430,29 @@ module core #(
     // The borrowing unit gets the port once no LSU shared read is in flight
     // (the arbiter stops accepting new requests as soon as it asks).
     assign sh_rd_gnt = sh_rd_hold && !arb_sh_busy;
-    assign sh_raddr  = sh_rd_gnt ? unit_sh_raddr : arb_sh_raddr;
+    // The peer's DSMEM load borrows the port the same way, after the tensor
+    // core. xr_ack (with the data) follows a grant by one cycle; the cycle it
+    // is high the peer still holds xr_req, so no second grant then.
+    wire xr_gnt = xr_req && !sh_rd_hold && !arb_sh_busy && !xr_ack;
+    always @(posedge clk) xr_ack <= reset ? 1'b0 : xr_gnt;
+    assign xr_data  = sh_rdata;
+    assign sh_raddr = sh_rd_gnt ? unit_sh_raddr : xr_gnt ? xr_addr : arb_sh_raddr;
+
+    // Our outgoing DSMEM loads: the LSU arbiter and the tensor core (MMA2)
+    // share the one link to the peer. Whoever asks first holds it until ack.
+    wire        arb_pr_req, tc_pr_req;
+    wire [7:0]  arb_pr_addr, tc_pr_addr;
+    reg         pr_lock, pr_own;            // locked to: 0 = arbiter, 1 = TC
+    wire        pr_sel = pr_lock ? pr_own : (tc_pr_req ? 1'b1 : 1'b0);
+    assign pr_req  = pr_sel ? tc_pr_req : arb_pr_req;
+    assign pr_addr = pr_sel ? tc_pr_addr : arb_pr_addr;
+    always @(posedge clk) begin
+        if (reset) begin pr_lock <= 1'b0; pr_own <= 1'b0; end
+        else if (!pr_lock && pr_req) begin pr_lock <= 1'b1; pr_own <= pr_sel; end
+        else if (pr_lock && pr_ack) pr_lock <= 1'b0;
+    end
+    wire arb_pr_ack = pr_ack && !pr_sel;
+    wire tc_pr_ack  = pr_ack &&  pr_sel;
 
     lsu_write_arbiter #(
         .THREADS(WARPS_PER_CORE * THREADS_PER_BLOCK),
@@ -415,6 +469,14 @@ module core #(
         .g_waddr(l1_wr_addr),
         .g_wdata(l1_wr_data),
         .g_wack(l1_wr_ack),
+        .r_wreq(pw_req),
+        .r_waddr(pw_addr),
+        .r_wdata(pw_data),
+        .r_wack(pw_ack),
+        .x_wreq(xw_req),
+        .x_waddr(xw_addr),
+        .x_wdata(xw_data),
+        .x_wack(xw_ack),
         .mem_we(mem_we),
         .mem_waddr(mem_waddr),
         .mem_wdata(mem_wdata),
@@ -435,13 +497,17 @@ module core #(
         .req(lsu_req),
         .addr(lsu_addr),
         .space(lsu_space),
-        .hold(sh_rd_hold || eng_rd_req),
+        .hold(sh_rd_hold || eng_rd_req || xr_req),
         .sh_busy(arb_sh_busy),
         .mem_busy(arb_mem_busy),
         .g_req(l1_rd_req),
         .g_addr(l1_rd_addr),
         .g_ack(l1_rd_ack),
         .g_rdata(l1_rd_data),
+        .r_req(arb_pr_req),
+        .r_addr(arb_pr_addr),
+        .r_ack(arb_pr_ack),
+        .r_data(pr_data),
         .mem_raddr(arb_mem_raddr),
         .mem_rdata(mem_rdata),
         .sh_raddr(arb_sh_raddr),
@@ -575,6 +641,8 @@ module core #(
         .b_addr(rt_bus[current_warp][0][9:0]),
         .d_tile(decoded_immediate[4:3]),
         .accumulate(decoded_immediate[5]),
+        .pair(decoded_mma2 && cluster_mode),
+        .rank(block_id[0]),
         .cfg_we(decoded_tcfg && core_state == UPDATE_STATE),
         .cfg_data(rs_bus[current_warp][0]),
         .busy(tc_busy),
@@ -582,6 +650,10 @@ module core #(
         .sh_gnt(sh_rd_gnt),
         .sh_raddr(unit_sh_raddr),
         .sh_rdata(sh_rdata),
+        .pr_req(tc_pr_req),
+        .pr_addr(tc_pr_addr),
+        .pr_ack(tc_pr_ack),
+        .pr_data(pr_data),
         .tld_col(decoded_immediate[5:2]),
         .tld_data(tld_data),
         .qshift(tc_qshift)
@@ -672,6 +744,7 @@ module core #(
                     .enable(1'b1),
                     .block_id(block_id),
                     .grid_dim(grid_dim),
+                    .cluster_rank(cluster_mode && block_id[0]),
                     .core_state(core_state),
                     .thread_active(active_mask[w][i]),
                     .warp_active(warp_active_flag),

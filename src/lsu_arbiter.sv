@@ -42,6 +42,12 @@ module lsu_arbiter #(
     input  wire                 g_ack,
     input  wire [15:0]          g_rdata,
 
+    // ---- the PEER core's shared memory (DSMEM: LDS with address bit 10) ----
+    output reg                  r_req,
+    output reg  [7:0]           r_addr,                  // peer word address
+    input  wire                 r_ack,                   // 1-cycle, with r_data
+    input  wire [31:0]          r_data,
+
     // ---- main memory read port ----
     output reg  [12:0]          mem_raddr,
     input  wire [7:0]           mem_rdata,
@@ -60,14 +66,17 @@ module lsu_arbiter #(
     localparam S_IDLE = 2'd0,
                S_WAIT = 2'd1,    // BRAM 1-cycle read latency
                S_RESP = 2'd2,    // data valid, pulse ready
-               S_GWAIT = 2'd3;   // global load: wait for the L1
+               S_GWAIT = 2'd3,   // global load: wait for the L1
+               S_RWAIT = 3'd4;   // DSMEM load: wait for the peer core
 
-    reg [1:0]       state;
+    reg [2:0]       state;
     reg [IDX-1:0]   svc;         // thread currently being served
     reg [1:0]       svc_space;   // ... and which memory it reads
     reg             svc_hi;      // shared: upper halfword of the word
 
-    assign sh_busy  = (state != S_IDLE) && (svc_space == 2'd1);
+    // (a DSMEM load waits on the PEER's port, so it leaves ours free --
+    // otherwise two cores loading from each other would deadlock)
+    assign sh_busy  = (state == S_WAIT || state == S_RESP) && (svc_space == 2'd1);
     assign mem_busy = (state != S_IDLE) && (svc_space == 2'd0);
 
     // Lowest set request bit (iterate high->low so the lowest index wins).
@@ -92,6 +101,8 @@ module lsu_arbiter #(
             svc_hi    <= 1'b0;
             g_req     <= 1'b0;
             g_addr    <= 16'd0;
+            r_req     <= 1'b0;
+            r_addr    <= 8'd0;
             for (j = 0; j < THREADS; j = j + 1) rdata[j] <= 16'd0;
         end else begin
             ready <= '0;                           // ready is a 1-cycle pulse
@@ -101,7 +112,11 @@ module lsu_arbiter #(
                             svc       <= sel;
                             svc_space <= space[sel];
                             svc_hi    <= addr[sel][1];
-                            if (space[sel] == 2'd2) begin
+                            if (space[sel] == 2'd1 && addr[sel][10]) begin
+                                r_req  <= 1'b1;               // LDS from the peer
+                                r_addr <= addr[sel][9:2];
+                                state  <= S_RWAIT;
+                            end else if (space[sel] == 2'd2) begin
                                 g_req  <= 1'b1;               // LDG -> L1
                                 g_addr <= addr[sel][15:0];
                                 state  <= S_GWAIT;
@@ -120,6 +135,13 @@ module lsu_arbiter #(
                                         : svc_hi     ? sh_rdata[31:16]
                                         :              sh_rdata[15:0];
                             state      <= S_IDLE;      // look for the next request
+                        end
+
+                S_RWAIT: if (r_ack) begin
+                            r_req      <= 1'b0;
+                            ready[svc] <= 1'b1;
+                            rdata[svc] <= svc_hi ? r_data[31:16] : r_data[15:0];
+                            state      <= S_IDLE;
                         end
 
                 S_GWAIT: if (g_ack) begin

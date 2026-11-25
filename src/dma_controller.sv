@@ -34,6 +34,7 @@ module dma_controller #(
 
     // ---- launch config: gridDim from the header (see S_HEADER_INSTR_H) ----
     output reg  [7:0]           grid_dim,
+    output wire                 cluster,       // header data_size bit 14: cluster launch
 
     // ---- status: high while the DMA owns the write port ----
     output reg                  loading
@@ -53,7 +54,9 @@ module dma_controller #(
     reg                  gpu_done_d;    // for rising-edge detection of gpu_done
     
     reg [15:0]           instr_size;    // How many 16-bit instruction WORDS
-    reg [15:0]           data_size;     // How many bytes of data (bit 15: to global memory)
+    reg [15:0]           data_size;     // How many bytes of data (bit 15: to global memory,
+                                        //  bit 14: cluster launch)
+    assign cluster = data_size[14];
     
     reg [15:0]           instr_wdata_reg; // Holds the first half of a 16-bit instruction
     reg                  byte_toggle;     // 0 = low byte, 1 = high byte
@@ -153,8 +156,8 @@ module dma_controller #(
 
                             if (wptr == instr_size - 1) begin
                                 wptr  <= '0;
-                                state <= (data_size[14:0] == 0) ? S_RUN : S_LOAD_DATA;
-                                if (data_size[14:0] == 0) gpu_start <= 1'b1;
+                                state <= (data_size[13:0] == 0) ? S_RUN : S_LOAD_DATA;
+                                if (data_size[13:0] == 0) gpu_start <= 1'b1;
                             end else begin
                                 wptr <= wptr + 1'b1;
                             end
@@ -167,7 +170,7 @@ module dma_controller #(
                 // ============================================================
                 S_LOAD_DATA: begin
                     loading <= 1'b1;
-                    if (data_size[14:0] == 0) begin
+                    if (data_size[13:0] == 0) begin
                         gpu_start <= 1'b1;
                         loading <= 1'b0;
                         state <= S_RUN;

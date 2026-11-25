@@ -76,3 +76,4 @@ sim_smem
 sim_mma
 sim_sdram
 sim_global
+sim_cluster

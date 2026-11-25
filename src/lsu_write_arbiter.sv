@@ -38,6 +38,19 @@ module lsu_write_arbiter #(
     output wire [15:0]          g_wdata,
     input  wire                 g_wack,
 
+    // ---- DSMEM: this core's store into the PEER's shared memory (STS with
+    //      address bit 10), taken or not the same cycle ----
+    output wire                 r_wreq,
+    output wire [9:0]           r_waddr,
+    output wire [15:0]          r_wdata,
+    input  wire                 r_wack,
+    // ---- ... and the peer's stores into OURS. Served first, ahead of our
+    //      own lanes, so two cores storing into each other cannot deadlock ----
+    input  wire                 x_wreq,
+    input  wire [9:0]           x_waddr,
+    input  wire [15:0]          x_wdata,
+    output wire                 x_wack,
+
     output reg                  mem_we,
     output reg  [12:0]          mem_waddr,
     output reg  [7:0]           mem_wdata,
@@ -73,6 +86,17 @@ module lsu_write_arbiter #(
     // A global store goes to the L1 combinationally and is granted when the
     // write buffer takes it (g_wack); until then the lane keeps waiting.
     assign g_wreq  = any && !hold && (space[sel] == 2'd2);
+
+    wire to_peer = (space[sel] == 2'd1) && waddr[sel][10];
+    assign r_wreq  = any && !hold && to_peer;
+    assign r_waddr = waddr[sel][9:0];
+    assign r_wdata = wdata[sel];
+    assign x_wack  = x_wreq && !hold;
+    // Can the selected lane be granted this cycle?
+    wire sel_ok = (space[sel] == 2'd2) ? g_wack
+                : to_peer              ? r_wack
+                : (space[sel] == 2'd1) ? !x_wack     // our shared port is taken by the peer
+                :                        1'b1;
     assign g_waddr = waddr[sel][15:0];
     assign g_wdata = wdata[sel];
 
@@ -92,9 +116,15 @@ module lsu_write_arbiter #(
             last_grant_oh <= '0;
             mem_we        <= 1'b0;
             sh_we         <= 1'b0;
-            if (any && !hold && (space[sel] != 2'd2 || g_wack)) begin
-                if (space[sel] == 2'd2) begin
-                    // taken by the L1 this cycle
+            if (x_wack) begin
+                sh_we    <= 1'b1;          // the peer's DSMEM store
+                sh_waddr <= x_waddr[9:2];
+                sh_wdata <= {x_wdata, x_wdata};
+                sh_wbe   <= x_waddr[1] ? 4'b1100 : 4'b0011;
+            end
+            if (any && !hold && sel_ok) begin
+                if (space[sel] == 2'd2 || to_peer) begin
+                    // taken by the L1 / the peer this cycle
                 end else if (space[sel] == 2'd1) begin
                     sh_we    <= 1'b1;
                     sh_waddr <= waddr[sel][9:2];

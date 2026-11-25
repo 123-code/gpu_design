@@ -19,6 +19,12 @@ module scheduler #(
     // Divergence signals
     input wire decoded_sync,
     input wire decoded_bar,
+    // Cluster barrier: a CBAR is a BAR that, in a cluster launch, also waits
+    // until the peer core's block has reached it
+    input wire decoded_cbar,
+    input wire cluster_mode,
+    input wire peer_arrived,        // the peer core is parked at its CBAR
+    output wire cbar_arrived,       // ... and so are we
 
     // Tensor core: an MMA/TCFG/TLD/TLDQ issued while the unit is busy parks
     // the warp (it yields) and re-executes once the unit is idle.
@@ -69,6 +75,18 @@ module scheduler #(
     reg [1:0] warp_status [WARPS_PER_CORE-1:0];
     reg [WARPS_PER_CORE-1:0] tc_parked;   // waiting for the tensor core
     reg [WARPS_PER_CORE-1:0] tma_parked;  // waiting for the copy engine
+    reg bar_cluster;                       // the pending barrier is a CBAR
+
+    // Every live warp is parked at the barrier (computed from the statuses)
+    reg at_bar_c, bar_open_c;
+    always @(*) begin
+        at_bar_c = 1'b0; bar_open_c = 1'b1;
+        for (integer b = 0; b < WARPS_PER_CORE; b = b + 1) begin
+            if (warp_status[b] == WARP_BARRIER) at_bar_c = 1'b1;
+            if (warp_status[b] == WARP_READY || warp_status[b] == WARP_WAITING) bar_open_c = 1'b0;
+        end
+    end
+    assign cbar_arrived = at_bar_c && bar_open_c && bar_cluster && cluster_mode;
 
     // Divergence Stacks (Per Warp), SDEPTH reconvergence levels each.
     //
@@ -96,6 +114,7 @@ module scheduler #(
             current_warp <= 0;
             tc_parked <= '0;
             tma_parked <= '0;
+            bar_cluster <= 1'b0;
             for (integer w = 0; w < WARPS_PER_CORE; w = w + 1) begin
                 warp_pc[w] <= 0;
                 stack_ptr[w*2 +: 2] <= 2'b0;
@@ -171,11 +190,16 @@ module scheduler #(
                 end
                 if (sw_found)            core_state <= FETCH;
                 else if (sw_all_done)    core_state <= DONE;
-                else if (sw_at_bar && sw_bar_open) begin
+                else if (sw_at_bar && sw_bar_open
+                         && (!(bar_cluster && cluster_mode) || peer_arrived)) begin
                     // Barrier complete: every warp that has not exited is
-                    // parked at it. Release them all; pick one next cycle.
+                    // parked at it (and, for a CBAR in a cluster launch, the
+                    // peer block is too -- both cores see the other's arrival
+                    // on the same edge and release together). Release them
+                    // all; pick one next cycle.
                     for (sw = 0; sw < WARPS_PER_CORE; sw = sw + 1)
                         if (warp_status[sw] == WARP_BARRIER) warp_status[sw] <= WARP_READY;
+                    bar_cluster <= 1'b0;
                 end
             end
             FETCH: begin //fetching the next instruction
@@ -276,6 +300,7 @@ module scheduler #(
                 end else if (decoded_bar) begin
                     // Park at the barrier (PC already points past BAR)
                     warp_status[current_warp] <= WARP_BARRIER;
+                    if (decoded_cbar) bar_cluster <= 1'b1;
                     core_state <= SELECT_WARP;
                 end else begin 
                     core_state <= SELECT_WARP; // Context switch every instruction!

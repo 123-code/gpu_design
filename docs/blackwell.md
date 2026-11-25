@@ -15,6 +15,7 @@ drive each one and the testbench that proves it.
 | [FP8 / FP4 / MX block scaling](#fp8--fp4--mx-block-scaling) | `kind::f8f6f4`, `kind::mxf4` (2nd-gen Transformer Engine) | `make sim-mma-all` |
 | [TMA bulk copy](#tma-bulk-copy) | Tensor Memory Accelerator, `cp.async.bulk` | `make sim-tma` |
 | [Global memory: SDRAM + L1](#global-memory-sdram--l1) | HBM3e + memory controllers, per-SM L1 | `make sim-sdram`, `make sim-global` |
+| [Clusters: DSMEM, CBAR, MMA2](#clusters-dsmem-cbar-mma2) | thread-block clusters, distributed shared memory, `cta_group::2` | `make sim-cluster` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -282,6 +283,49 @@ check (588 of them) exposed it.
 
 On the board, the SDRAM port names follow the Tang Nano 20K's
 embedded-SDRAM examples. The SDRAM path has not been run on hardware.
+
+---
+
+## Clusters: DSMEM, CBAR, MMA2
+
+Hopper added thread-block clusters: groups of blocks guaranteed to run at
+the same time on neighbouring SMs, able to read and write each other's
+shared memory (distributed shared memory) and to barrier together.
+Blackwell's tensor core builds on that with `cta_group::2`: two SMs execute
+one MMA, each holding half of the B operand. This design has exactly two
+cores, so a cluster here is a pair.
+
+- **Cluster launch.** Header `data_size` bit 14 (`send_kernel.py
+  --cluster`). The dispatcher then issues blocks in pairs: 2k to core 0
+  and 2k+1 to core 1, together, only when both cores are free. A block's
+  rank in its pair is `CRANK Rd` (= blockIdx & 1). gridDim should be even.
+- **Distributed shared memory.** `LDS`/`STS` with address bit 10 set go
+  to the *other* core's shared memory, over a link between the cores. A
+  peer's load borrows our shared read port the way the tensor core does; a
+  peer's store goes through our write arbiter ahead of our own lanes. A
+  DSMEM load waits on the peer's port and leaves ours free. Those two rules
+  are what keep two cores that load and store into each other at the same
+  time from deadlocking.
+- **`CBAR`** (`0xF008`) is a `BAR` that, in a cluster launch, also waits
+  for the peer block: each core raises "arrived" once every live warp is
+  parked, and both cores release on the same edge once both have arrived.
+  Outside a cluster launch it is a plain `BAR`.
+- **`MMA2 Ra, Rb, #t, #acc`** (`MACL`, rd field 3) is the 2-SM MMA. B is
+  8 columns wide: columns 0..3 live in rank 0's shared memory, 4..7 in
+  rank 1's, at the same address. Each core supplies its own A (4 rows) and
+  gets a 4 x 8 result in TMEM tiles t and t+1. The tensor core fetches the
+  peer's half of B (and its MX scales) over the DSMEM link. So the pair
+  computes an 8 x 8 output while each core stages only half of B, which is
+  the point of pairing.
+
+`make sim-cluster` (s8 and mxf4) runs one cluster. Rank 1 deliberately
+starts late. Each block stores into the peer's shared memory, `CBAR`s,
+reads back its own shared memory (the peer's values) and the peer's (by a
+DSMEM load), then stages its A and its half of B with `TMA`, `CBAR`s, and
+issues `MMA2`. Both cores' results are checked byte for byte. Two planted
+bugs fail the test: making `CBAR` not wait for the peer, and having `MMA2`
+read the local half of B twice. The first only failed once rank 1 was made
+late: with both blocks in lockstep the race never shows.
 
 ---
 
