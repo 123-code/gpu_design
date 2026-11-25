@@ -1,0 +1,12 @@
+// Board-to-board link pins (src/board_link.sv), added to gpu.cst by
+// oss_build/build_board.sh when LINK_ENABLE=1 (otherwise the link ports are
+// compiled out with NO_LINK_PORTS and need no pins).
+//
+// Pins 29 and 30 are general-purpose IO on the Tang Nano 20K header (apicula's
+// own tangnano20k.cst drives them as plain LVCMOS33 outputs). Wire board A's
+// link_tx to board B's link_rx and back, plus a common ground. Check the
+// pinout of your board revision before wiring.
+IO_LOC  "link_tx" 29;
+IO_PORT "link_tx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "link_rx" 30;
+IO_PORT "link_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;

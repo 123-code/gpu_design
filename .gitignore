@@ -84,3 +84,4 @@ sim_link
 .ystmp/
 sim_subset
 sim_mlc
+oss_build/board/

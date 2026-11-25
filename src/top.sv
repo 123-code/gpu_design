@@ -59,27 +59,47 @@ module top #(
     output wire       tmds_clk_p,    // HDMI            (PINs 33-40)
     output wire       tmds_clk_n,
     output wire [2:0] tmds_d_p,
-    output wire [2:0] tmds_d_n,
-    // In-package SDRAM (GW2AR-18: 64 Mbit, 2M x 32). Port names follow the
-    // Tang Nano 20K examples, which the vendor flow binds to the die's SDRAM.
-    // Board-to-board link (two GPIO wires to the other board; NVLink in miniature)
-    output wire        link_tx,
+    output wire [2:0] tmds_d_n
+    // Optional ports. A board build that leaves the board link or global
+    // memory out defines NO_LINK_PORTS / NO_SDRAM_PORTS, and the ports
+    // become internal wires: no pins, nothing for gpu.cst to constrain.
+`ifndef NO_LINK_PORTS
+    // Board-to-board link (two GPIO wires to the other board; NVLink in
+    // miniature). Pins: src/gpu_link.cst.
+    , output wire      link_tx
 `ifdef SYNTH
-    input  wire        link_rx,     // board: needs a pull-up on the pin
+    , input  wire      link_rx      // board: PULL_MODE=UP (src/gpu_link.cst)
 `else
-    input  tri1        link_rx,     // sim: idles high when no board is attached
+    , input  tri1      link_rx      // sim: idles high when no board is attached
 `endif
-    output wire        O_sdram_clk,
-    output wire        O_sdram_cke,
-    output wire        O_sdram_cs_n,
-    output wire        O_sdram_cas_n,
-    output wire        O_sdram_ras_n,
-    output wire        O_sdram_wen_n,
-    output wire [3:0]  O_sdram_dqm,
-    output wire [10:0] O_sdram_addr,
-    output wire [1:0]  O_sdram_ba,
-    inout  wire [31:0] IO_sdram_dq
+`endif
+`ifndef NO_SDRAM_PORTS
+    // In-package SDRAM (GW2AR-18: 64 Mbit, 2M x 32). The names are the ones
+    // the Tang Nano 20K examples use for the die's embedded SDRAM; they are
+    // internal to the package, so they take no IO_LOC (src/gpu_sdram.cst).
+    , output wire        O_sdram_clk
+    , output wire        O_sdram_cke
+    , output wire        O_sdram_cs_n
+    , output wire        O_sdram_cas_n
+    , output wire        O_sdram_ras_n
+    , output wire        O_sdram_wen_n
+    , output wire [3:0]  O_sdram_dqm
+    , output wire [10:0] O_sdram_addr
+    , output wire [1:0]  O_sdram_ba
+    , inout  wire [31:0] IO_sdram_dq
+`endif
 );
+`ifdef NO_LINK_PORTS
+    wire link_tx;
+    wire link_rx = 1'b1;
+`endif
+`ifdef NO_SDRAM_PORTS
+    wire O_sdram_clk, O_sdram_cke, O_sdram_cs_n, O_sdram_cas_n, O_sdram_ras_n, O_sdram_wen_n;
+    wire [3:0]  O_sdram_dqm;
+    wire [10:0] O_sdram_addr;
+    wire [1:0]  O_sdram_ba;
+    wire [31:0] IO_sdram_dq;
+`endif
     // ---- system clock: 27 MHz crystal pin -> 54 MHz via the rPLL ----
     // (gowin_pll is a transparent pass-through in simulation, so tbs drive sys_clk
     // with their own clk and CLK_FREQ.) Everything below runs on sys_clk.

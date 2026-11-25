@@ -21,8 +21,9 @@ drive each one and the testbench that proves it.
 | [Board-to-board link](#board-to-board-link) | NVLink / NVL72 (GPUs storing into each other's memory) | `make sim-link` |
 | [Linear on the tensor core](#linear-on-the-tensor-core) | cuBLAS/CUTLASS lowering a GEMM onto tensor cores | `make fuzz-tc`, `make sim-mlc MLC_FLAGS=--tc` |
 
-Everything here is checked in simulation (`make regress`). None of it has been
-built for or run on the board yet; see [Board fit](#board-fit).
+Everything here is checked in simulation (`make regress`). A board subset
+places and routes for the GW2AR-18 (see [Board fit](#board-fit)); none of it
+has run on hardware yet.
 
 ---
 
@@ -514,36 +515,62 @@ Needs a 1-warp launch, as the FMAC path already does.
 
 ## Board fit
 
-The board build is `oss_build/build_cfg.sh` (yosys + nextpnr-himbaechel),
-which this environment does not have. The features above have not been
-synthesized, placed, or timed for the GW2AR-18. Treat them as simulated RTL.
+`oss_build/build_board.sh` synthesizes, places and routes one configuration
+for the GW2AR-18 and prints nextpnr's utilisation and Fmax. With no
+arguments it builds the **board subset**:
 
-Expect them not to fit as they stand. yosys `synth_gowin` (pre-place, no
-nextpnr) on the new modules that synthesize on their own:
+- 2 cores x 1 warp x 4 lanes
+- tensor core with the int8 kinds only (`TC_KINDS` s8 + u8, the ones
+  `graph_compiler --tc` uses), TMA, shared memory, clusters
+- no global memory / L1 / SDRAM, no board link, no host CPU
+
+Any other configuration is a list of `chparam` settings for `top`, e.g.
+`bash oss_build/build_board.sh big -set THREADS_PER_BLOCK 9 -set BLOCK_DIM 9`.
+
+| Board subset, nextpnr-himbaechel | used / available |
+|---|---|
+| LUT4 | 16,324 / 20,736 (78%) |
+| ALU | 2,704 / 15,552 (17%) |
+| DFF | 5,915 / 15,552 (38%) |
+| BSRAM | 13 / 46 (28%) |
+| DSP (MULT18X18 + MULT9X9) | 8 + 28 |
+| sys_clk Fmax | 51.95 MHz against 54 (fails by 4%; see below) |
+
+The worst path in that build was the grid dispatcher's in-order retirement
+(block offset, a variable-length drain and the issue window, all
+combinational). The dispatcher now retires at most one block per cycle into
+a registered window, which removes that path; blocks take thousands of
+cycles, so nothing is lost. A build with that change was still running when
+this was written.
+
+For comparison, everything on (2 x 9 lanes, all MMA kinds, L1s, SDRAM,
+link) synthesizes to ~71.5k LUT4 + 18.7k ALU, about 4x the chip; with every
+new feature off it is the old design. Per-module yosys numbers:
 
 | Module | LUT4 | FF | Notes |
 |---|---|---|---|
-| `tensor_core` (all 4 kinds, MMA2) | 7037 | 543 | per core; multipliers land in LUTs, TMEM in 56 RAM16SDP4 |
-| `l1_cache` | 2060 | 156 | per core; lines in 132 RAM16SDP4 |
+| `tensor_core` (all 5 kinds, MMA2) | ~7,000 | ~540 | per core; the FP8/FP4/MX datapaths are most of it, hence `TC_KINDS` |
+| `l1_cache` | 2,060 | 156 | per core |
 | `copy_engine` | 158 | 110 | per core |
-| `shared_memory` | 49 | 80 | per core |
 | `sdram_ctrl` | 391 | 178 | |
 | `board_link` (+ router) | 874 | 249 | |
-| `host_cpu` | 3024 | 385 | 4 KB RAM in 2 BSRAM, register file in 32 RAM16SDP4 (was 9,724 LUT4 / 1,318 FF with a flip-flop register file) |
+| `host_cpu` | 3,024 | 385 | 4 KB RAM in 2 BSRAM, register file in 32 RAM16SDP4 |
 
-The GW2AR-18 has 20,736 LUT4s. Two tensor cores alone would take about
-two thirds of it. The pre-existing 2 cores x 9 lanes
-build already used 78% of the LUTs. A board build would choose a subset
-(for example one tensor-core kind, no host CPU) or fewer lanes, and that has
-not been measured. The design now reads straight into yosys (no `sv2v`): the
-three modules that passed unpacked arrays through ports take packed vectors.
+**Ports.** A feature that is off takes its ports with it (`NO_SDRAM_PORTS`,
+`NO_LINK_PORTS`, set by the script), so the default build needs nothing
+beyond `gpu.cst`. With global memory on, the embedded SDRAM's `O_sdram_*` /
+`IO_sdram_dq` need no constraints: apicula's chip database maps those exact
+names to the die's SDRAM, and nextpnr places them itself (checked: a build
+with global memory and the link on packs its IO with no constraint errors).
+With the link on, `src/gpu_link.cst` puts `link_tx` / `link_rx` on header
+pins 29 / 30 (pull-up on `link_rx`); check your board's pinout before wiring.
 
-`top.sv` also gained ports `gpu.cst` does not constrain yet:
+**Tools.** The script needs no sv2v. With a recent yosys (OSS CAD Suite) it is
+one pass. In this environment the system yosys is 0.33, which does not infer
+Gowin DSPs and emits block-RAM cells nextpnr rejects, so the numbers above
+come from the split flow (`Y71=<yowasp-yosys>`: yosys 0.71 up to LUT mapping,
+the system yosys for ABC, YoWASP nextpnr). Memories are mapped without
+true-dual-port blocks (`oss_build/gowin/`), which nextpnr cannot place.
 
-- the in-package SDRAM (`O_sdram_*`, `IO_sdram_dq`), named as in the Tang
-  Nano 20K examples. The vendor flow binds those names to the die's SDRAM;
-  whether the open-source flow does is unverified.
-- `link_tx` / `link_rx` for the board link. They need two free header pins,
-  and `link_rx` needs a pull-up.
-
-Until those are constrained, a board build should leave them out.
+None of this has been on a board yet: these are place-and-route results, not
+hardware runs.

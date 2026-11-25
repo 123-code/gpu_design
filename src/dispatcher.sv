@@ -67,23 +67,20 @@ module dispatcher #(
     wire [7:0] off_0 = core_0_id - emit_block;
     wire [7:0] off_1 = core_1_id - emit_block;
 
-    // Finished-set after this cycle's retirements, before the in-order drain
+    // Finished-set with this cycle's retirements. The in-order drain moves
+    // emit_block past at most ONE finished block per cycle: blocks take
+    // thousands of cycles, and draining several at once put a long carry
+    // chain (offset, drain count, window compare) on the critical path.
     reg [WINDOW-1:0] fin_next;
-    integer k;
-    reg [7:0] drain;                     // how many leading finished blocks retire
     always @(*) begin
         fin_next = fin;
         if (retire_0) fin_next[off_0[$clog2(WINDOW)-1:0]] = 1'b1;
         if (retire_1) fin_next[off_1[$clog2(WINDOW)-1:0]] = 1'b1;
-        drain = 8'd0;
-        for (k = 0; k < WINDOW; k = k + 1)
-            if (fin_next[k] && drain == k) drain = drain + 8'd1;
     end
 
     // Can a block be issued this cycle? (in the grid, and inside the window
-    // measured from where emit_block will be after this cycle's drain)
-    wire [7:0] emit_after = emit_block + drain;
-    wire can_issue = (next_block < total) && (next_block - emit_after < WINDOW);
+    // past the oldest unfinished block)
+    wire can_issue = (next_block < total) && (next_block - emit_block < WINDOW);
 
     always @(posedge clk) begin
         if (reset) begin
@@ -101,9 +98,12 @@ module dispatcher #(
             core_1_start <= pending_start[1];
             pending_start <= 2'b00;
 
-            // In-order retirement
-            fin        <= fin_next >> drain;
-            emit_block <= emit_after;
+            // In-order retirement, one block per cycle
+            if (fin_next[0]) begin
+                fin        <= fin_next >> 1;
+                emit_block <= emit_block + 8'd1;
+            end else
+                fin <= fin_next;
             if (retire_0) core_0_busy <= 1'b0;
             if (retire_1) core_1_busy <= 1'b0;
 
