@@ -147,7 +147,7 @@ A B200 has ~148 SMs and 192 GB of HBM3e. None of that scale fits on a $30 FPGA. 
 
 - **The compiler uses the tensor core.** `graph_compiler --tc` lowers every Linear to TMA + MMA + TLDQ: the trained MLP runs 32x faster, bit-identical.
 
-All of it is simulated and self-checking (`make regress`). It does not all fit on the chip at once: `oss_build/build_board.sh` builds a board subset (2 cores x 4 lanes with the tensor core, TMA, shared memory and clusters) that places and routes at 78% of the LUTs; timing and details in [board fit](docs/blackwell.md#board-fit)). None of it has run on hardware yet.
+All of it is simulated and self-checking (`make regress`). It does not all fit on the chip at once: `oss_build/build_board.sh` builds a board subset (2 cores x 4 lanes with the tensor core, TMA, shared memory and clusters) that places and routes at 78% of the LUTs; timing and details in [board fit](docs/blackwell.md#board-fit). None of it has run on hardware yet.
 
 ## Instruction set
 
