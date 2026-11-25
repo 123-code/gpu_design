@@ -18,6 +18,7 @@ drive each one and the testbench that proves it.
 | [Clusters: DSMEM, CBAR, MMA2](#clusters-dsmem-cbar-mma2) | thread-block clusters, distributed shared memory, `cta_group::2` | `make sim-cluster` |
 | [Overlapped issue](#overlapped-issue) | the SM's instruction pipeline | `make sim-cpi` |
 | [On-chip host CPU](#on-chip-host-cpu) | Grace + NVLink-C2C (GB200's CPU sharing memory with the GPU) | `make sim-host` |
+| [Board-to-board link](#board-to-board-link) | NVLink / NVL72 (GPUs storing into each other's memory) | `make sim-link` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -433,8 +434,55 @@ UART frame, so GPU stores to them are dropped during a CPU-launched run.
 
 ---
 
+## Board-to-board link
+
+An NVL72 rack's 72 GPUs can each store directly into any other's memory over
+NVLink. `src/board_link.sv` does that for two boards joined by two wires
+(`link_tx` to the other board's `link_rx`):
+
+- A global store (`STG`) whose address has **bit 15** set is remote. Each
+  core's global port goes through a `link_router`, which sends such a store
+  to the link instead of the SDRAM and acknowledges it once queued, so it
+  stays posted. Remote loads are not supported (they read 0); the pattern
+  is "push to the peer, then synchronize", as with NVLink stores and a
+  barrier.
+- The link queues up to 8 stores and sends each as a 5-byte packet
+  (`0xA5`, address, data), UART-framed at `LINK_DIV` system clocks per bit.
+  That is 13.5 Mbit/s at 54 MHz, about eight orders of magnitude short of
+  NVLink 5's 1.8 TB/s per GPU. The receiver turns each packet into a masked
+  halfword write to its own SDRAM, at the same address with bit 15 clear, as
+  a fifth SDRAM-arbiter client.
+- A run is not `done` until the link has sent everything, so a host that
+  sees the run finish knows every remote store has left the board.
+
+`make sim-link` simulates two complete boards (each a `top` with its own
+SDRAM model) and runs an all-reduce of two 8-element vectors in two phases.
+In phase 1 each board stores its vector into the other's memory. In phase 2
+each board adds its own vector and the received one. Both boards must end
+with v_A + v_B, and each direction must have carried exactly 8 packets.
+With remote routing disabled, no packets move and the test fails.
+
+---
+
 ## Board fit
 
 The board build is `oss_build/build_cfg.sh` (yosys + nextpnr-himbaechel),
 which this environment does not have. The features above have not been
 synthesized, placed, or timed for the GW2AR-18. Treat them as simulated RTL.
+
+Expect them not to fit as they stand. The pre-existing 2 cores x 9 lanes
+build already used 78% of the LUTs, and these features add a lot to each
+core: a tensor core with FP8/FP4 datapaths, TMEM, a copy engine, an L1, and
+shared memory, plus the SDRAM controller, arbiters, host CPU and link at the
+top level. A board build would choose a subset, or fewer lanes, and that has
+not been measured.
+
+`top.sv` also gained ports `gpu.cst` does not constrain yet:
+
+- the in-package SDRAM (`O_sdram_*`, `IO_sdram_dq`), named as in the Tang
+  Nano 20K examples. The vendor flow binds those names to the die's SDRAM;
+  whether the open-source flow does is unverified.
+- `link_tx` / `link_rx` for the board link. They need two free header pins,
+  and `link_rx` needs a pull-up.
+
+Until those are constrained, a board build should leave them out.

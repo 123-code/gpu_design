@@ -6,12 +6,12 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: regress regress-full sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Regression: every self-checking testbench that runs in a few seconds.
 # regress-full adds the minute-scale end-to-end sims and a short fuzz.
 REGRESS = sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp \
-          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host
+          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link
 REGRESS_FULL = $(REGRESS) sim-mlp2 sim-mnist-jpp-full sim-raycast sim-hdmi
 regress:        ## Run the fast self-checking testbenches; stops at the first FAIL
 	@python3 test/regress.py $(REGRESS)
@@ -272,3 +272,9 @@ sim-host:       ## On-chip RV32I host CPU (C firmware) loads, launches and check
 	cd software && python3 fw/build.py host_kernel.hex build/fw.hex
 	$(IVERILOG) -g2012 -s tb -o sim_host test/tb_host.sv test/sdram_model.sv src/*.sv
 	$(VVP) sim_host
+
+sim-link:       ## Two boards joined by the board link: an all-reduce of two vectors via remote global stores
+	cd software && cargo run --quiet -- link_phase1.asm link_phase1.hex > /dev/null
+	cd software && cargo run --quiet -- link_phase2.asm link_phase2.hex > /dev/null
+	$(IVERILOG) -g2012 -s tb -o sim_link test/tb_link.sv test/sdram_model.sv src/*.sv
+	$(VVP) sim_link

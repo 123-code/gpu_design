@@ -40,7 +40,9 @@ module top #(
     parameter SDRAM_REF_CYCLES  = 750,
     // On-chip host CPU (host_cpu.sv): 0 = none, the PC is the host (default)
     parameter HOST_CPU = 0,
-    parameter FIRMWARE = "software/build/fw.hex"
+    parameter FIRMWARE = "software/build/fw.hex",
+    // Board link (board_link.sv): system clocks per link bit
+    parameter LINK_DIV = 4
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
@@ -52,6 +54,9 @@ module top #(
     output wire [2:0] tmds_d_n,
     // In-package SDRAM (GW2AR-18: 64 Mbit, 2M x 32). Port names follow the
     // Tang Nano 20K examples, which the vendor flow binds to the die's SDRAM.
+    // Board-to-board link (two GPIO wires to the other board; NVLink in miniature)
+    output wire        link_tx,
+    input  tri1        link_rx,     // idles high (pull-up) when no board is attached
     output wire        O_sdram_clk,
     output wire        O_sdram_cke,
     output wire        O_sdram_cs_n,
@@ -95,11 +100,15 @@ module top #(
     wire        dma_g_we;             // a payload byte for global memory
     wire [12:0] dma_g_addr;
     wire [7:0]  dma_g_data;
-    // global-memory clients: 0 = core 0, 1 = core 1, 2 = DMA, 3 = host CPU
-    wire [3:0]  g_req, g_we_c, g_ack, g_rvalid, g_done;
-    wire [20:0] g_addr_c  [3:0];
-    wire [31:0] g_wdata_c [3:0];
-    wire [3:0]  g_wbe_c   [3:0];
+    // global-memory clients: 0 = core 0, 1 = core 1, 2 = DMA, 3 = host CPU,
+    // 4 = stores arriving over the board link
+    wire [4:0]  g_req, g_we_c, g_ack, g_rvalid, g_done;
+    wire [20:0] g_addr_c  [4:0];
+    wire [31:0] g_wdata_c [4:0];
+    wire [3:0]  g_wbe_c   [4:0];
+    // the cores' side of their link routers
+    wire [1:0]  cg_req, cg_ack, cg_rvalid, cg_done;
+    wire [31:0] cg_rdata [1:0];
     wire [31:0] sd_rdata;
     wire        gpu_start, loading; // gpu start is high when the image was loaded loading is high while image is still loading from dma
     wire        instr_we;
@@ -117,6 +126,8 @@ module top #(
     wire [12:0] gpu_waddr_1;
     wire [7:0]  gpu_wdata_1;
     wire        done;                 // GPU finished a run,fed back, so dma can get new data
+    wire        gpu_done_raw;         // the GPU's own done; `done` also waits for the board link
+    wire        link_idle;
     wire [7:0]  result;               //predicted (in this case 8 bits because it is a digit)
 
     data_pipeline #(
@@ -185,7 +196,7 @@ module top #(
         .grid_dim(run_grid),
         .cluster(run_cluster),
         .result(result),
-        .done(done),
+        .done(gpu_done_raw),
         .debug_core_state(),
         .debug_instruction(),
         .operand_a(6'd0),             // operand-injection unused in host-driven mode
@@ -203,12 +214,12 @@ module top #(
         .mem_we_1(gpu_we_1),
         .mem_waddr_1(gpu_waddr_1),
         .mem_wdata_1(gpu_wdata_1),
-        .g0_req(g_req[0]), .g0_we(g_we_c[0]), .g0_addr(g_addr_c[0]), .g0_wdata(g_wdata_c[0]),
-        .g0_wbe(g_wbe_c[0]), .g0_ack(g_ack[0]), .g0_rvalid(g_rvalid[0]), .g0_rdata(sd_rdata),
-        .g0_done(g_done[0]),
-        .g1_req(g_req[1]), .g1_we(g_we_c[1]), .g1_addr(g_addr_c[1]), .g1_wdata(g_wdata_c[1]),
-        .g1_wbe(g_wbe_c[1]), .g1_ack(g_ack[1]), .g1_rvalid(g_rvalid[1]), .g1_rdata(sd_rdata),
-        .g1_done(g_done[1]),
+        .g0_req(cg_req[0]), .g0_we(g_we_c[0]), .g0_addr(g_addr_c[0]), .g0_wdata(g_wdata_c[0]),
+        .g0_wbe(g_wbe_c[0]), .g0_ack(cg_ack[0]), .g0_rvalid(cg_rvalid[0]), .g0_rdata(cg_rdata[0]),
+        .g0_done(cg_done[0]),
+        .g1_req(cg_req[1]), .g1_we(g_we_c[1]), .g1_addr(g_addr_c[1]), .g1_wdata(g_wdata_c[1]),
+        .g1_wbe(g_wbe_c[1]), .g1_ack(cg_ack[1]), .g1_rvalid(cg_rvalid[1]), .g1_rdata(cg_rdata[1]),
+        .g1_done(cg_done[1]),
         .emit_valid(emit_valid),
         .emit_data(emit_data),
         .emit_ready(emit_ready)
@@ -238,7 +249,45 @@ module top #(
     assign g_wdata_c[2] = {4{dg_data}};
     assign g_wbe_c[2]   = 4'b0001 << dg_addr[1:0];
 
-    mem_arb #(.N(4)) u_garb (
+    // ---- board link: each core's global port goes through a router that
+    //      sends stores to bit-15 addresses to the other board ----
+    wire [1:0]  lk_req, lk_ack;
+    wire [15:0] lk_addr [1:0];
+    wire [15:0] lk_data [1:0];
+    genvar gl;
+    generate for (gl = 0; gl < 2; gl = gl + 1) begin : routers
+        link_router u_rt (
+            .clk(sys_clk), .reset(sys_reset),
+            .c_req(cg_req[gl]), .c_we(g_we_c[gl]), .c_addr(g_addr_c[gl]),
+            .c_wdata(g_wdata_c[gl]), .c_wbe(g_wbe_c[gl]),
+            .c_ack(cg_ack[gl]), .c_rvalid(cg_rvalid[gl]), .c_done(cg_done[gl]), .c_rdata(cg_rdata[gl]),
+            .a_req(g_req[gl]), .a_ack(g_ack[gl]), .a_rvalid(g_rvalid[gl]), .a_done(g_done[gl]),
+            .a_rdata(sd_rdata),
+            .l_req(lk_req[gl]), .l_addr(lk_addr[gl]), .l_data(lk_data[gl]), .l_ack(lk_ack[gl])
+        );
+    end endgenerate
+    // one link, two cores: core 0 first
+    wire        lk_s_ack;
+    wire        lk_pick1 = !lk_req[0];
+    assign lk_ack[0] = lk_s_ack && !lk_pick1;
+    assign lk_ack[1] = lk_s_ack &&  lk_pick1;
+    wire [15:0] lk_link_sent, lk_link_received;
+    board_link #(.DIV(LINK_DIV)) u_link (
+        .clk(sys_clk), .reset(sys_reset),
+        .s_req(lk_req[0] || lk_req[1]),
+        .s_addr(lk_pick1 ? lk_addr[1] : lk_addr[0]),
+        .s_data(lk_pick1 ? lk_data[1] : lk_data[0]),
+        .s_ack(lk_s_ack), .idle(link_idle),
+        .r_req(g_req[4]), .r_addr(g_addr_c[4]), .r_wdata(g_wdata_c[4]), .r_wbe(g_wbe_c[4]),
+        .r_ack(g_ack[4]), .r_done(g_done[4]),
+        .link_tx(link_tx), .link_rx(link_rx),
+        .sent(lk_link_sent), .received(lk_link_received)
+    );
+    assign g_we_c[4] = 1'b1;
+    // A run is done once the GPU is and every remote store has left the board
+    assign done = gpu_done_raw && link_idle;
+
+    mem_arb #(.N(5)) u_garb (
         .clk(sys_clk), .reset(sys_reset),
         .c_req(g_req), .c_we(g_we_c), .c_addr(g_addr_c), .c_wdata(g_wdata_c), .c_wbe(g_wbe_c),
         .c_ack(g_ack), .c_rvalid(g_rvalid), .c_done(g_done),
