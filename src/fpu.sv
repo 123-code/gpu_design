@@ -59,12 +59,12 @@ assign mantissa_sum = do_subtract ? (larger_mantissa - aligned_smaller)
 
 //priority encoder loop to find the 1 that should lead the number. save number of preceding 0's to top_bits
 always_comb begin : count_leading_zeros
+    // Scan low->high and keep overwriting: the last hit is the highest set bit.
+    // (Same result as a high->low scan with `break`, which iverilog 12 rejects.)
     top_bits = 0;
-    for(int i = $size(mantissa_sum)-1;i >= 0;i--) begin
-        if(mantissa_sum[i] == 1)begin
+    for(int i = 0; i < $size(mantissa_sum); i++) begin
+        if(mantissa_sum[i] == 1)
             top_bits = i[7:0];
-            break;
-        end
     end
 
     //we then shift by the distance to the target

@@ -10,7 +10,10 @@ module scheduler #(
     input wire reset,//reset signal
     input wire start,//signal from the dispatcher to begin execution
     input wire decoded_ret,//comes from the instruction decoder,turns on on RET instruction, means the program must halt if this is high, we no longer fetch, we go to DONE
-    input wire [1:0] lsu_state [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0],//signals from the lsu to indicate its state
+    // LSU states, flattened: thread (w,i) at [(w*THREADS_PER_BLOCK+i)*2 +: 2].
+    // (Packed, not an unpacked 2-D port: iverilog 12 crashes elaborating
+    // unpacked-array ports when a dimension is [0:0], i.e. WARPS_PER_CORE=1.)
+    input wire [WARPS_PER_CORE*THREADS_PER_BLOCK*2-1:0] lsu_state_flat,
     input wire [WARPS_PER_CORE-1:0] warp_emit,  // thread 0 of warp w has a UART emit in flight
 
     // Divergence signals
@@ -25,8 +28,8 @@ module scheduler #(
     
     // Warp State Outputs
     output reg current_warp, // Which warp is currently driving the pipeline?
-    output reg [7:0] warp_pc [WARPS_PER_CORE-1:0],
-    output reg [THREADS_PER_BLOCK-1:0] active_mask [WARPS_PER_CORE-1:0], // register "remembers" which threads are currently awake
+    output wire [WARPS_PER_CORE*8-1:0] warp_pc_flat,                    // warp w's PC at [w*8 +: 8]
+    output wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] active_mask_flat, // warp w's mask at [w*TPB +: TPB]
 
     output reg [3:0] core_state,//register holding state
     output reg done
@@ -38,6 +41,20 @@ module scheduler #(
                UPDATE = 4'b0111, DONE = 4'b1000;
 
     localparam WARP_READY = 2'b00, WARP_WAITING = 2'b01, WARP_DONE = 2'b10;
+
+    reg [7:0] warp_pc [WARPS_PER_CORE-1:0];
+    reg [THREADS_PER_BLOCK-1:0] active_mask [WARPS_PER_CORE-1:0]; // which threads are awake
+    wire [1:0] lsu_state [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    genvar gw, gi;
+    generate
+        for (gw = 0; gw < WARPS_PER_CORE; gw = gw + 1) begin : flat_ports
+            assign warp_pc_flat[gw*8 +: 8] = warp_pc[gw];
+            assign active_mask_flat[gw*THREADS_PER_BLOCK +: THREADS_PER_BLOCK] = active_mask[gw];
+            for (gi = 0; gi < THREADS_PER_BLOCK; gi = gi + 1) begin : flat_lsu
+                assign lsu_state[gw][gi] = lsu_state_flat[(gw*THREADS_PER_BLOCK+gi)*2 +: 2];
+            end
+        end
+    endgenerate
     reg [1:0] warp_status [WARPS_PER_CORE-1:0];
 
     // Divergence Stacks (Per Warp), SDEPTH reconvergence levels each.

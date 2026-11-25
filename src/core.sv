@@ -45,6 +45,10 @@ module core #(
     assign debug_core_state = core_state[2:0];
     wire [1:0] lsu_states [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [THREADS_PER_BLOCK-1:0] active_mask [WARPS_PER_CORE-1:0];
+    // Packed views for the scheduler's ports (see scheduler.sv)
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK*2-1:0] lsu_states_flat;
+    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0]   active_mask_flat;
+    wire [WARPS_PER_CORE*8-1:0]                   warp_pc_flat;
 
     // ==========================================
     // DECODER DATAPATH WIRES (real ports from decoder.sv)
@@ -140,7 +144,7 @@ module core #(
         .reset(reset),
         .start(start),
         .decoded_ret(decoded_ret), // It is finally alive!
-        .lsu_state(lsu_states),
+        .lsu_state_flat(lsu_states_flat),
         
         .decoded_sync(decoded_sync),
         .decoded_pc_mux(decoded_pc_mux),
@@ -152,12 +156,23 @@ module core #(
         .warp_emit(warp_emit),
         
         .current_warp(current_warp),
-        .warp_pc(warp_pc),
+        .warp_pc_flat(warp_pc_flat),
 
         .core_state(core_state),
         .done(done),
-        .active_mask(active_mask)
+        .active_mask_flat(active_mask_flat)
     );
+
+    genvar fw, fi;
+    generate
+        for (fw = 0; fw < WARPS_PER_CORE; fw = fw + 1) begin : unflatten
+            assign warp_pc[fw]     = warp_pc_flat[fw*8 +: 8];
+            assign active_mask[fw] = active_mask_flat[fw*THREADS_PER_BLOCK +: THREADS_PER_BLOCK];
+            for (fi = 0; fi < THREADS_PER_BLOCK; fi = fi + 1) begin : flat_lsu
+                assign lsu_states_flat[(fw*THREADS_PER_BLOCK+fi)*2 +: 2] = lsu_states[fw][fi];
+            end
+        end
+    endgenerate
 
     // ==========================================
     // THE THREAD GRID

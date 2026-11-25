@@ -6,7 +6,19 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+
+# Regression: every self-checking testbench that runs in a few seconds.
+# regress-full adds the minute-scale end-to-end sims and a short fuzz.
+REGRESS = sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp \
+          sim-nn sim-mnist-jpp sim-jpp-features
+REGRESS_FULL = $(REGRESS) sim-mlp2 sim-mnist-jpp-full sim-raycast sim-hdmi
+regress:        ## Run the fast self-checking testbenches; stops at the first FAIL
+	@python3 test/regress.py $(REGRESS)
+
+regress-full:   ## regress + the slow end-to-end sims + a 20-model fuzz
+	@python3 test/regress.py $(REGRESS_FULL)
+	cd software && python3 fuzz_mlc.py --n 20 --seed 1
 
 # Run any testbench under Verilator (the tool the job posting names) instead of
 # iverilog. Verilator is a stricter linter and much faster; --timing lets it
@@ -59,6 +71,7 @@ sim-divmerge:   ## Validate divergence + reconvergence (common code runs on all 
 sim-mnist-jpp-full: ## The whole MNIST CNN in J++ (mnist.jpp), board config 1 warp x 9 threads: maps + prediction vs reference
 	cd software && cargo run --quiet --bin jpp -- mnist.jpp mnist_jpp.asm
 	cd software && cargo run --quiet -- mnist_jpp.asm mnist_jpp.hex
+	mkdir -p software/build
 	cd software && python3 run_mnist_jpp.py --sim 0
 	$(IVERILOG) -g2012 -s tb -o sim_mnist_jpp_full test/tb_mnist_jpp_full.sv src/*.sv
 	$(VVP) sim_mnist_jpp_full
