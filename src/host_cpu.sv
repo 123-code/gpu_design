@@ -12,6 +12,11 @@
 // launches a grid, waits, and reads the results back, with no host PC
 // involved. Its firmware is C, built with clang for rv32i (software/fw/).
 //
+// Everything is block/distributed RAM, not flip-flops: the 4 KB RAM is one
+// synchronous-read memory with byte enables, and the register file is two
+// synchronous-read copies (one per source operand) written together, read in
+// the IR cycle from the instruction word as it arrives.
+//
 // Multi-cycle, no pipeline, no cache: FETCH -> EXEC -> (MEM) -> back. All of
 // RV32I except FENCE/ECALL/EBREAK/CSR (FENCE runs as a no-op; ECALL/EBREAK
 // halt). Local RAM (firmware, data, stack) at 0; everything else is a stall-
@@ -40,7 +45,15 @@ module host_cpu #(
     reg [31:0] ram [0:RAM_WORDS-1];
     initial $readmemh(FIRMWARE, ram);
 
-    reg  [31:0] x [0:31];
+    // register file: two read copies, written together (x0 reads as 0)
+    reg  [31:0] rf1 [0:31];
+    reg  [31:0] rf2 [0:31];
+    reg  [31:0] r1, r2;                 // operands, read in S_IR
+    reg         rf_we;
+    reg  [4:0]  rf_waddr;
+    reg  [31:0] rf_wdata;
+    integer ri;
+    initial for (ri = 0; ri < 32; ri = ri + 1) begin rf1[ri] = 32'd0; rf2[ri] = 32'd0; end
     reg  [31:0] pc;
     reg  [31:0] ir;
     reg  [31:0] ram_rdata;
@@ -60,6 +73,12 @@ module host_cpu #(
         ram_rdata <= ram[ram_raddr];
     end
 
+    // FETCH: address the RAM; FWAIT: RAM samples it; IR: latch the word;
+    // EXEC: everything else (loads/stores add LOAD+LOADW or BUS)
+    localparam S_FETCH = 3'd0, S_FWAIT = 3'd1, S_EXEC = 3'd2, S_LOAD = 3'd3,
+               S_BUS = 3'd4, S_HALT = 3'd5, S_IR = 3'd6, S_LOADW = 3'd7;
+    reg [2:0]  state;
+
     // ---------------- decode ----------------
     wire [6:0]  opc = ir[6:0];
     wire [4:0]  rd  = ir[11:7];
@@ -67,8 +86,19 @@ module host_cpu #(
     wire [4:0]  rs1 = ir[19:15];
     wire [4:0]  rs2 = ir[24:20];
     wire [6:0]  f7  = ir[31:25];
-    wire [31:0] v1  = (rs1 == 5'd0) ? 32'd0 : x[rs1];
-    wire [31:0] v2  = (rs2 == 5'd0) ? 32'd0 : x[rs2];
+    wire [31:0] v1  = (rs1 == 5'd0) ? 32'd0 : r1;
+    wire [31:0] v2  = (rs2 == 5'd0) ? 32'd0 : r2;
+
+    always @(posedge clk) begin
+        if (rf_we) begin
+            rf1[rf_waddr] <= rf_wdata;
+            rf2[rf_waddr] <= rf_wdata;
+        end
+        if (state == S_IR) begin            // the word arriving now is the instruction
+            r1 <= rf1[ram_rdata[19:15]];
+            r2 <= rf2[ram_rdata[24:20]];
+        end
+    end
     wire [31:0] imm_i = {{20{ir[31]}}, ir[31:20]};
     wire [31:0] imm_s = {{20{ir[31]}}, ir[31:25], ir[11:7]};
     wire [31:0] imm_b = {{19{ir[31]}}, ir[31], ir[7], ir[30:25], ir[11:8], 1'b0};
@@ -132,25 +162,20 @@ module host_cpu #(
         end
     endfunction
 
-    // FETCH: address the RAM; FWAIT: RAM samples it; IR: latch the word;
-    // EXEC: everything else (loads/stores add LOAD+LOADW or BUS)
-    localparam S_FETCH = 3'd0, S_FWAIT = 3'd1, S_EXEC = 3'd2, S_LOAD = 3'd3,
-               S_BUS = 3'd4, S_HALT = 3'd5, S_IR = 3'd6, S_LOADW = 3'd7;
-    reg [2:0]  state;
     reg [31:0] ld_addr;
 
-    integer i;
     always @(posedge clk) begin
         if (reset) begin
             state   <= S_FETCH;
             pc      <= 32'd0;
             bus_req <= 1'b0;
             ram_we  <= 1'b0;
+            rf_we   <= 1'b0;
             halted  <= 1'b0;
             ir      <= 32'h00000013;           // nop
-            for (i = 0; i < 32; i = i + 1) x[i] <= 32'd0;
         end else begin
             ram_we <= 1'b0;
+            rf_we  <= 1'b0;
             case (state)
                 S_FETCH: begin
                     ram_raddr <= pc[AW+1:2];
@@ -165,12 +190,12 @@ module host_cpu #(
                     pc    <= pc + 32'd4;
                     state <= S_FETCH;
                     case (opc)
-                        7'b0110111: x[rd] <= imm_u;                       // LUI
-                        7'b0010111: x[rd] <= pc + imm_u;                  // AUIPC
-                        7'b1101111: begin x[rd] <= pc + 32'd4; pc <= pc + imm_j; end   // JAL
-                        7'b1100111: begin x[rd] <= pc + 32'd4; pc <= (v1 + imm_i) & ~32'd1; end // JALR
+                        7'b0110111: begin rf_we <= (rd != 5'd0); rf_waddr <= rd; rf_wdata <= imm_u; end                       // LUI
+                        7'b0010111: begin rf_we <= (rd != 5'd0); rf_waddr <= rd; rf_wdata <= pc + imm_u; end                  // AUIPC
+                        7'b1101111: begin begin rf_we <= (rd != 5'd0); rf_waddr <= rd; rf_wdata <= pc + 32'd4; end pc <= pc + imm_j; end   // JAL
+                        7'b1100111: begin begin rf_we <= (rd != 5'd0); rf_waddr <= rd; rf_wdata <= pc + 32'd4; end pc <= (v1 + imm_i) & ~32'd1; end // JALR
                         7'b1100011: if (take) pc <= pc + imm_b;           // branches
-                        7'b0010011, 7'b0110011: x[rd] <= alu;             // OP-IMM / OP
+                        7'b0010011, 7'b0110011: begin rf_we <= (rd != 5'd0); rf_waddr <= rd; rf_wdata <= alu; end             // OP-IMM / OP
                         7'b0000011: begin                                 // loads
                             ld_addr <= ls_addr;
                             if (ls_local) begin
@@ -205,18 +230,17 @@ module host_cpu #(
                 end
                 S_LOAD: state <= S_LOADW;
                 S_LOADW: begin
-                    if (rd != 5'd0) x[rd] <= load_ext(ram_rdata, f3, ld_addr[1:0]);
+                    if (rd != 5'd0) begin rf_we <= (rd != 5'd0); rf_waddr <= rd; rf_wdata <= load_ext(ram_rdata, f3, ld_addr[1:0]); end
                     state <= S_FETCH;
                 end
                 S_BUS: if (bus_ack) begin
                     bus_req <= 1'b0;
-                    if (!bus_we && rd != 5'd0) x[rd] <= load_ext(bus_rdata, f3, ld_addr[1:0]);
+                    if (!bus_we && rd != 5'd0) begin rf_we <= (rd != 5'd0); rf_waddr <= rd; rf_wdata <= load_ext(bus_rdata, f3, ld_addr[1:0]); end
                     state <= S_FETCH;
                 end
                 S_HALT: ;
                 default: state <= S_FETCH;
             endcase
-            x[0] <= 32'd0;
         end
     end
 endmodule

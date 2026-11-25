@@ -483,7 +483,7 @@ nextpnr) on the new modules that synthesize on their own:
 | `shared_memory` | 49 | 80 | per core |
 | `sdram_ctrl` | 391 | 178 | |
 | `board_link` (+ router) | 874 | 249 | |
-| `host_cpu` | 9724 | 1318 | its register file and 4 KB RAM do not map to block RAM as written |
+| `host_cpu` | 3024 | 385 | 4 KB RAM in 2 BSRAM, register file in 32 RAM16SDP4 (was 9,724 LUT4 / 1,318 FF with a flip-flop register file) |
 
 The GW2AR-18 has 20,736 LUT4s. Two tensor cores alone would take about
 two thirds of it. The pre-existing 2 cores x 9 lanes
