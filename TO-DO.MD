@@ -98,3 +98,37 @@ fuzzer) runs anywhere with iverilog + cargo; torch is only needed to re-run
 - Stores commit late; don't re-read an address you wrote a few cycles ago.
 - Address 63 is the memory-mapped UART. `plan()` steps GPU-written buffers over
   it — a fuzzer finding, not a theoretical one.
+
+# Blackwell features (Nov 2026)
+
+Everything in docs/blackwell.md is simulated and self-checking (`make regress`,
+20 targets), and none of it has been on the board. In the order I'd do next:
+
+1. **Pick a board subset and measure it.** The tensor core alone is ~7k LUT4
+   per core in yosys (multipliers in LUTs, not the 48 DSPs), the L1 ~2k, the
+   host CPU ~9.7k as written. A board build needs a subset (one MMA kind, no
+   host CPU, maybe one core with the tensor core) and `sv2v` + nextpnr numbers.
+2. **Constrain the new ports.** `gpu.cst` has nothing for the SDRAM
+   (`O_sdram_*`, `IO_sdram_dq`) or the board link (`link_tx`, `link_rx`, which
+   needs a pull-up). Check whether the open-source flow binds the embedded
+   SDRAM by those names.
+3. **Compiler support.** graph_compiler still lowers Linear to FMAC loops. The
+   obvious win is Linear -> TMA + MMA (s8, or e4m3/e2m1 with the quantizer
+   emitting those codes) + TLDQ, which is requantize+ReLU on the way out.
+4. **One instruction per cycle.** The issue loop is 3 cycles (fetch overlaps
+   writeback, operands read in DECODE). Going further needs per-stage control
+   bundles (every unit reads the one decoder today), a scoreboard and per-stage
+   warp tags: a rewrite of the core's control path.
+5. **Host CPU on block RAM.** Its register file and 4 KB RAM do not infer as
+   BSRAM as written (reset loop on the register file, byte-enable RAM style).
+
+Gotchas from this round:
+
+- `make sim` (test/tb.sv) was already failing before any of this: it never
+  loads a program into the instruction RAM. It is not in `make regress`.
+- iverilog 12 can't take unpacked-array ports with a [0:0] dimension
+  (1-warp configs) or `break`; both are fixed, don't reintroduce them.
+- A block's `done` now waits for its L1 write buffer, copy engine and tensor
+  core to go idle (`make sim-drain` shows stores lost without it).
+- Kernels launched by the host CPU should keep data in global memory: the DMA
+  owns the data-memory write port while it waits for a UART frame.

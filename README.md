@@ -131,6 +131,22 @@ The lexer cuts the text into tokens (`manifest`, a name, a number, an operator).
 
 `software/mnist.jpp` is the whole MNIST CNN in J++: a 3×3 convolution (28×28 to 26×26), a 2×2 max pool (to 13×13), a dense layer 169→10, then argmax. It compiles to 186 instructions. Convolution and pooling are split across lanes with `tid`, so on the 9-thread bitstream the run is 241k cycles, down from 1.04M when the same work is one pixel at a time. `make sim-mnist-jpp-full` checks the conv map, the pooled map, and the prediction against `software/mnist_ref.py`.
 
+## Blackwell, in miniature
+
+A B200 has ~148 SMs and 192 GB of HBM3e. None of that scale fits on a $30 FPGA. The mechanisms do, at small size: [docs/blackwell.md](docs/blackwell.md) has one section per feature, with the instructions that drive it and the test that proves it.
+
+- **Grid scheduling.** A launch is `gridDim` blocks queued onto the cores as they free up, with the reply kept in blockIdx order.
+- **Shared memory and `BAR`.** A 1 KB scratchpad per core and a block-wide barrier.
+- **A tensor core with Tensor Memory.** An async 4x4 MMA that reads A and B from shared memory by address and accumulates in TMEM, not registers. Kinds: int8, FP8 (e4m3), FP4 (e2m1), and MXFP4 with E8M0 block scales, all bit-exact against a Python model.
+- **TMA.** A copy engine that streams operand tiles into shared memory while the previous MMA runs.
+- **Global memory.** The in-package 64 Mbit SDRAM, shared by both cores and the host, with a controller, a per-core L1, `LDG`/`STG`, and TMA from global.
+- **Clusters.** The two cores as a pair: distributed shared memory, a cluster barrier, and a 2-SM MMA with B split across the cores.
+- **Overlapped issue.** 3 cycles per compute instruction instead of 6.
+- **An on-chip host CPU.** An RV32I core running C firmware that loads, launches, and checks GPU kernels through the shared SDRAM. Grace, at this scale.
+- **A board-to-board link.** Two wires, remote global stores, and an all-reduce across two simulated boards. NVLink, at this scale.
+
+All of it is simulated and self-checking (`make regress`). None of it has been built for the board or run on it yet. It will not all fit at once; [the board-fit notes](docs/blackwell.md#board-fit) have yosys estimates.
+
 ## Instruction set
 
 Every instruction is 16 bits. `[15:12]` is the opcode, `[11:9]` is `rd`, `[8:6]` is `rs`, `[5:0]` is the immediate. The third register, `rt`, lives in `[2:0]`.
@@ -157,6 +173,18 @@ Every instruction is 16 bits. `[15:12]` is the opcode, `[11:9]` is `rd`, `[8:6]`
 
 R0–R7 are the registers an instruction can name. The fields are 3 bits. R13, R14, and R15 are the SIMT identity registers, copied into R0–R7 by `BID`, `BDIM`, and `TID`.
 
+The Blackwell features added more, all in fields their host instructions left unused, so the opcode count is still 16:
+
+| Mnemonic | Lives in | What it does |
+| --- | --- | --- |
+| `GDIM` / `CRANK rd` | `MOV`, `rs` = 5 / 6 | gridDim / rank in a cluster pair |
+| `LDS` / `STS` | `LDR` bit 5 / `STR` rd = 1 | shared-memory halfword |
+| `LDG` / `STG` | `LDR` bit 4 / `STR` rd = 2 | global-memory halfword, through the L1 |
+| `BAR` / `CBAR` | `RET` bit 1 / bit 3 | block barrier / cluster barrier |
+| `MMA` / `MMA2` / `TCFG` | `MACL` rd = 1 / 3 / 2 | tensor-core MMA / 2-SM MMA / kind + readout shift |
+| `TLD` / `TLDQ` | `MAC` rs = 1 / 2 | TMEM row to a register / requantized to 0..255 |
+| `TMA` / `TMAG` / `TMAWAIT` | `ADDB` rd = 010 / 011, `RET` bit 2 | bulk copy to shared memory, from data / global memory; wait |
+
 `WBASE` is `ADDB` with bit 11 set, and `SYNC` is `RET` with bit 0 set. The decoder splits them, so the ISA grew without spending a new opcode. Upstream tiny-gpu had 11 instructions. The MAC and FC ops, the shifts, the base pointers, and `SYNC` are what let a dot product and a divergent `if` fit in a program this small.
 
 ## J++
@@ -168,7 +196,7 @@ The compiler is `software/src`: `lexer.rs`, `parser.rs`, `codegen.rs`, and the a
 | `manifest x = …` | A variable. Register-allocated. |
 | `grind_until (cond) { … }` | A loop. `CMP` and a branch. |
 | `yeet expr` | Emit a byte. Store to the UART address. |
-| `tid` / `bid` / `bdim` | This lane's thread, block, and block size. |
+| `tid` / `bid` / `bdim` / `gdim` | This lane's thread, block, block size, and grid size. |
 | `crunch_push` / `crunch_fire x, n` | `MACL`, then `MAC`. `n` picks byte 0–3 of the 32-bit sum. |
 | `*`, `<<`, `>>`, parentheses | `MUL`, `SHL`, `SHR` on each lane's ALU. |
 | `if (cond) { … }` | `CMP`, a branch, `SYNC`. Lanes may disagree. |
@@ -202,6 +230,13 @@ make sim-raycast        # two raycaster frames, every column against the referen
 ```
 
 Each one is the smallest proof that one piece of the machine works: divergence, warp ids, the MAC path, the compiler.
+
+The Blackwell features each have their own target too (`sim-grid`, `sim-smem`, `sim-mma-all`, `sim-tma`, `sim-sdram`, `sim-global`, `sim-cluster`, `sim-cpi`, `sim-drain`, `sim-host`, `sim-link`; see [docs/blackwell.md](docs/blackwell.md)). Two targets run everything:
+
+```bash
+make regress        # every fast self-checking testbench, a few minutes
+make regress-full   # plus the slow end-to-end sims and a 20-model fuzz
+```
 
 ## Build and flash
 
@@ -258,9 +293,11 @@ src/        gpu, core, scheduler, dispatcher, decoder, registers, alu, pc,
             lsu, lsu_arbiter, lsu_write_arbiter, vector_mac, fc_mac,
             main_memory, program_memory, dma_controller, data_pipeline,
             uart_rx, uart_tx, hdmi, gowin_pll, top
+            + shared_memory, tensor_core, copy_engine, l1_cache, mem_arb,
+            sdram_ctrl, host_cpu, board_link   (docs/blackwell.md)
 software/   Rust crate. Assembler in src/main.rs, J++ in src/bin/jpp.rs.
             Kernels (*.jpp, *.asm). UART host scripts. MNIST weights.
-test/       Self-checking testbenches.
+test/       Self-checking testbenches. sdram_model.sv checks the SDRAM protocol.
 demo/       Draw-a-digit page.  make demo
 docs/       Diagrams, and the two recordings in docs/videos/
 oss_build/  Yosys + nextpnr flow.

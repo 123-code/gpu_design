@@ -217,6 +217,8 @@ and a non-zero overlap between copy-engine and tensor-core busy cycles.
 | operands staged by TMA (`make sim-tma`) | 1408 |
 
 The tensor core was busy 93 cycles; 25 of them overlapped with a copy.
+(Measured when TMA went in. After the issue-loop change below, the same
+kernels take 2621 and 1095 cycles, and 27 cycles overlap.)
 
 ---
 
@@ -470,12 +472,26 @@ The board build is `oss_build/build_cfg.sh` (yosys + nextpnr-himbaechel),
 which this environment does not have. The features above have not been
 synthesized, placed, or timed for the GW2AR-18. Treat them as simulated RTL.
 
-Expect them not to fit as they stand. The pre-existing 2 cores x 9 lanes
-build already used 78% of the LUTs, and these features add a lot to each
-core: a tensor core with FP8/FP4 datapaths, TMEM, a copy engine, an L1, and
-shared memory, plus the SDRAM controller, arbiters, host CPU and link at the
-top level. A board build would choose a subset, or fewer lanes, and that has
-not been measured.
+Expect them not to fit as they stand. yosys `synth_gowin` (pre-place, no
+nextpnr) on the new modules that synthesize on their own:
+
+| Module | LUT4 | FF | Notes |
+|---|---|---|---|
+| `tensor_core` (all 4 kinds, MMA2) | 7037 | 543 | per core; multipliers land in LUTs, TMEM in 56 RAM16SDP4 |
+| `l1_cache` | 2060 | 156 | per core; lines in 132 RAM16SDP4 |
+| `copy_engine` | 158 | 110 | per core |
+| `shared_memory` | 49 | 80 | per core |
+| `sdram_ctrl` | 391 | 178 | |
+| `board_link` (+ router) | 874 | 249 | |
+| `host_cpu` | 9724 | 1318 | its register file and 4 KB RAM do not map to block RAM as written |
+
+The GW2AR-18 has 20,736 LUT4s. Two tensor cores alone would take about
+two thirds of it. The pre-existing 2 cores x 9 lanes
+build already used 78% of the LUTs. A board build would choose a subset
+(for example one tensor-core kind, no host CPU) or fewer lanes, and that has
+not been measured. The whole design was not synthesized here: yosys 0.33
+cannot read the core's unpacked-array ports without `sv2v`, which this
+environment lacks.
 
 `top.sv` also gained ports `gpu.cst` does not constrain yet:
 
