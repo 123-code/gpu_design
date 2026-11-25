@@ -338,6 +338,21 @@ module core #(
     wire [15:0]          wdata_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
     wire [1:0]           wspace_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
 
+    // Packed views of the per-lane arrays for the arbiters' ports
+    localparam NL = WARPS_PER_CORE*THREADS_PER_BLOCK;
+    wire [NL*LA-1:0] lsu_addr_pk, waddr_pk;
+    wire [NL*2-1:0]  lsu_space_pk, wspace_pk;
+    wire [NL*16-1:0] wdata_pk, arb_rdata_pk;
+    genvar pk;
+    generate for (pk = 0; pk < NL; pk = pk + 1) begin : pack_lanes
+        assign lsu_addr_pk[pk*LA +: LA] = lsu_addr[pk];
+        assign lsu_space_pk[pk*2 +: 2]  = lsu_space[pk];
+        assign waddr_pk[pk*LA +: LA]    = waddr_flat[pk];
+        assign wdata_pk[pk*16 +: 16]    = wdata_flat[pk];
+        assign wspace_pk[pk*2 +: 2]     = wspace_flat[pk];
+        assign arb_rdata[pk]            = arb_rdata_pk[pk*16 +: 16];
+    end endgenerate
+
     // ==========================================
     // L1 CACHE + GLOBAL PORT
     // ==========================================
@@ -378,9 +393,9 @@ module core #(
         .clk(clk), .reset(reset),
         .c_req({engm_req, l1m_req}),
         .c_we({1'b0, l1m_we}),
-        .c_addr(gp_addr),
-        .c_wdata(gp_wdata),
-        .c_wbe(gp_wbe),
+        .c_addr_p({gp_addr[1], gp_addr[0]}),
+        .c_wdata_p({gp_wdata[1], gp_wdata[0]}),
+        .c_wbe_p({gp_wbe[1], gp_wbe[0]}),
         .c_ack(gp_ack), .c_rvalid(gp_rvalid), .c_done(gp_done),
         .m_req(g_req), .m_we(g_we), .m_addr(g_addr), .m_wdata(g_wdata), .m_wbe(g_wbe),
         .m_ack(g_ack), .m_rvalid(g_rvalid), .m_done(g_done)
@@ -471,9 +486,9 @@ module core #(
         .clk(clk),
         .reset(reset),
         .we_req(we_req_flat),
-        .waddr(waddr_flat),
-        .wdata(wdata_flat),
-        .space(wspace_flat),
+        .waddr_p(waddr_pk),
+        .wdata_p(wdata_pk),
+        .space_p(wspace_pk),
         .hold(eng_wr_req),
         .g_wreq(l1_wr_req),
         .g_waddr(l1_wr_addr),
@@ -505,8 +520,8 @@ module core #(
         .clk(clk),
         .reset(reset),
         .req(lsu_req),
-        .addr(lsu_addr),
-        .space(lsu_space),
+        .addr_p(lsu_addr_pk),
+        .space_p(lsu_space_pk),
         .hold(sh_rd_hold || eng_rd_req || xr_req),
         .sh_busy(arb_sh_busy),
         .mem_busy(arb_mem_busy),
@@ -523,7 +538,7 @@ module core #(
         .sh_raddr(arb_sh_raddr),
         .sh_rdata(sh_rdata),
         .ready(arb_ready),
-        .rdata(arb_rdata)
+        .rdata_p(arb_rdata_pk)
     );
 
     // The scheduler drives the instruction ROM: the current warp's PC, or in

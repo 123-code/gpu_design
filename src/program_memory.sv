@@ -24,6 +24,7 @@ module program_memory #(
     // Physically allocate a block of BRAM on the FPGA. (Inferred as block RAM by
     // yosys/synth_gowin in the open-source flow. NOTE: Gowin's proprietary
     // GowinSynthesis SIGSEGVs inferring this; we build with the OSS toolchain.)
+    (* ram_style = "block" *)
     reg [WIDTH-1:0] rom_array [0:DEPTH-1];
 
     // Clock-synchronous read and write

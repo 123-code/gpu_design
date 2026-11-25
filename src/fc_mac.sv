@@ -27,7 +27,8 @@
 // core.sv change is needed; best_idx sits in result[7:0] where FBEST reads it.
 // ============================================================================
 module fc_mac #(
-    parameter BIAS_HEX = "/Users/joseignacio/tiny-gpu-fpga/software/mnist_data/bias.hex"
+    // Relative to the repo root, where every sim and build flow runs from
+    parameter BIAS_HEX = "software/mnist_data/bias.hex"
 ) (
     input  wire        clk,
     input  wire        reset,            // active-high

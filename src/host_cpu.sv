@@ -36,6 +36,7 @@ module host_cpu #(
 );
     localparam AW = $clog2(RAM_WORDS);
 
+    (* ram_style = "block" *)
     reg [31:0] ram [0:RAM_WORDS-1];
     initial $readmemh(FIRMWARE, ram);
 

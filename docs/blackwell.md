@@ -489,9 +489,8 @@ The GW2AR-18 has 20,736 LUT4s. Two tensor cores alone would take about
 two thirds of it. The pre-existing 2 cores x 9 lanes
 build already used 78% of the LUTs. A board build would choose a subset
 (for example one tensor-core kind, no host CPU) or fewer lanes, and that has
-not been measured. The whole design was not synthesized here: yosys 0.33
-cannot read the core's unpacked-array ports without `sv2v`, which this
-environment lacks.
+not been measured. The design now reads straight into yosys (no `sv2v`): the
+three modules that passed unpacked arrays through ports take packed vectors.
 
 `top.sv` also gained ports `gpu.cst` does not constrain yet:
 

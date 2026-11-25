@@ -47,6 +47,7 @@ module hdmi_columns #(
         idx = b[1] ? 2'd1 : b[2] ? 2'd2 : 2'd0;
     endfunction
 
+    (* ram_style = "block" *)
     reg [7:0] colmem [0:511];           // {buffer, column} -> half wall height
     integer z;
     initial for (z = 0; z < 512; z = z + 1) colmem[z] = 8'd0;   // power-up: empty room

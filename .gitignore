@@ -81,3 +81,4 @@ sim_cpi
 sim_drain
 sim_host
 sim_link
+.ystmp/

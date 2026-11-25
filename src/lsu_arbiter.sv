@@ -29,8 +29,10 @@ module lsu_arbiter #(
 
     // ---- requests from the thread LSUs ----
     input  wire [THREADS-1:0]      req,                  // mem_valid[i]
-    input  wire [ADDR_BITS-1:0]    addr  [THREADS-1:0],  // full mem_addr[i] (base+offset)
-    input  wire [1:0]              space [THREADS-1:0],  // 0 main, 1 shared, 2 global
+    // Per-thread request fields, packed (thread i at [i*W +: W]): yosys does
+    // not take unpacked-array ports, so the flow needs no sv2v for these.
+    input  wire [THREADS*ADDR_BITS-1:0] addr_p,          // full mem_addr[i] (base+offset)
+    input  wire [THREADS*2-1:0]         space_p,         // 0 main, 1 shared, 2 global
 
     input  wire                 hold,                    // accept no new request
     output wire                 sh_busy,                 // a shared read is in flight
@@ -58,8 +60,17 @@ module lsu_arbiter #(
 
     // ---- responses back to the LSUs ----
     output reg  [THREADS-1:0]   ready,                   // mem_ready[i] (1-cycle pulse)
-    output reg  [15:0]          rdata [THREADS-1:0]      // mem_read_data[i]
+    output wire [THREADS*16-1:0] rdata_p                 // mem_read_data[i]
 );
+    wire [ADDR_BITS-1:0] addr  [THREADS-1:0];
+    wire [1:0]           space [THREADS-1:0];
+    reg  [15:0]          rdata [THREADS-1:0];
+    genvar gp;
+    generate for (gp = 0; gp < THREADS; gp = gp + 1) begin : unpack
+        assign addr[gp]  = addr_p[gp*ADDR_BITS +: ADDR_BITS];
+        assign space[gp] = space_p[gp*2 +: 2];
+        assign rdata_p[gp*16 +: 16] = rdata[gp];
+    end endgenerate
     // Index width must cover all THREADS (was hardcoded 2-bit = 4 threads).
     localparam IDX = (THREADS <= 1) ? 1 : $clog2(THREADS);
 

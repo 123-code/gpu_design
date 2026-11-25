@@ -22,6 +22,8 @@ module main_memory #(
     input  wire [ADDR_BITS-1:0] raddr,
     output reg  [7:0]           rdata
 );
+    // Block RAM, not LUT RAM: in the full design yosys otherwise picks LUT RAM
+    (* ram_style = "block" *)
     reg [7:0] mem [0:DEPTH-1];
 
     // NO baked model. This memory used to $readmemh 3380 bytes of interleaved

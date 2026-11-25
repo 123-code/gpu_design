@@ -25,9 +25,10 @@ module lsu_write_arbiter #(
 
     // ---- write requests from the thread LSUs ----
     input  wire [THREADS-1:0]      we_req,                // held until granted
-    input  wire [ADDR_BITS-1:0]    waddr [THREADS-1:0],
-    input  wire [15:0]             wdata [THREADS-1:0],
-    input  wire [1:0]              space [THREADS-1:0],   // 0 main, 1 shared, 2 global
+    // packed per-thread fields (thread i at [i*W +: W]; see lsu_arbiter.sv)
+    input  wire [THREADS*ADDR_BITS-1:0] waddr_p,
+    input  wire [THREADS*16-1:0]        wdata_p,
+    input  wire [THREADS*2-1:0]         space_p,          // 0 main, 1 shared, 2 global
 
     input  wire                    hold,
 
@@ -65,6 +66,15 @@ module lsu_write_arbiter #(
     output reg  [THREADS-1:0]   wgrant
 );
     localparam IDX = (THREADS <= 1) ? 1 : $clog2(THREADS);
+    wire [ADDR_BITS-1:0] waddr [THREADS-1:0];
+    wire [15:0]          wdata [THREADS-1:0];
+    wire [1:0]           space [THREADS-1:0];
+    genvar gp;
+    generate for (gp = 0; gp < THREADS; gp = gp + 1) begin : unpack
+        assign waddr[gp] = waddr_p[gp*ADDR_BITS +: ADDR_BITS];
+        assign wdata[gp] = wdata_p[gp*16 +: 16];
+        assign space[gp] = space_p[gp*2 +: 2];
+    end endgenerate
 
     // A just-granted lane keeps asserting we_req for one more cycle (it clears on
     // the registered wgrant), so mask it out for that cycle to avoid a double

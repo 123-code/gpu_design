@@ -25,6 +25,7 @@ module shared_memory #(
     input  wire [$clog2(WORDS)-1:0] raddr,
     output reg  [31:0]              rdata
 );
+    (* ram_style = "block" *)
     reg [31:0] mem [0:WORDS-1];
 
     // Sim only: real BSRAM powers up to 0, iverilog to X

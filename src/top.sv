@@ -56,7 +56,11 @@ module top #(
     // Tang Nano 20K examples, which the vendor flow binds to the die's SDRAM.
     // Board-to-board link (two GPIO wires to the other board; NVLink in miniature)
     output wire        link_tx,
-    input  tri1        link_rx,     // idles high (pull-up) when no board is attached
+`ifdef SYNTH
+    input  wire        link_rx,     // board: needs a pull-up on the pin
+`else
+    input  tri1        link_rx,     // sim: idles high when no board is attached
+`endif
     output wire        O_sdram_clk,
     output wire        O_sdram_cke,
     output wire        O_sdram_cs_n,
@@ -289,7 +293,10 @@ module top #(
 
     mem_arb #(.N(5)) u_garb (
         .clk(sys_clk), .reset(sys_reset),
-        .c_req(g_req), .c_we(g_we_c), .c_addr(g_addr_c), .c_wdata(g_wdata_c), .c_wbe(g_wbe_c),
+        .c_req(g_req), .c_we(g_we_c),
+        .c_addr_p({g_addr_c[4], g_addr_c[3], g_addr_c[2], g_addr_c[1], g_addr_c[0]}),
+        .c_wdata_p({g_wdata_c[4], g_wdata_c[3], g_wdata_c[2], g_wdata_c[1], g_wdata_c[0]}),
+        .c_wbe_p({g_wbe_c[4], g_wbe_c[3], g_wbe_c[2], g_wbe_c[1], g_wbe_c[0]}),
         .c_ack(g_ack), .c_rvalid(g_rvalid), .c_done(g_done),
         .m_req(sd_req), .m_we(sd_we), .m_addr(sd_addr), .m_wdata(sd_wdata), .m_wbe(sd_wbe),
         .m_ack(sd_ack), .m_rvalid(sd_rvalid), .m_done(sd_done)

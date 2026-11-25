@@ -16,9 +16,9 @@ module mem_arb #(
 
     input  wire [N-1:0]      c_req,
     input  wire [N-1:0]      c_we,
-    input  wire [20:0]       c_addr  [N-1:0],
-    input  wire [31:0]       c_wdata [N-1:0],
-    input  wire [3:0]        c_wbe   [N-1:0],
+    input  wire [N*21-1:0]   c_addr_p,     // client i at [i*21 +: 21] (packed: yosys-friendly)
+    input  wire [N*32-1:0]   c_wdata_p,
+    input  wire [N*4-1:0]    c_wbe_p,
     output wire [N-1:0]      c_ack,
     output wire [N-1:0]      c_rvalid,
     output wire [N-1:0]      c_done,
@@ -33,6 +33,15 @@ module mem_arb #(
     input  wire              m_done
 );
     localparam IW = (N <= 1) ? 1 : $clog2(N);
+    wire [20:0] c_addr  [N-1:0];
+    wire [31:0] c_wdata [N-1:0];
+    wire [3:0]  c_wbe   [N-1:0];
+    genvar gp;
+    generate for (gp = 0; gp < N; gp = gp + 1) begin : unpack
+        assign c_addr[gp]  = c_addr_p[gp*21 +: 21];
+        assign c_wdata[gp] = c_wdata_p[gp*32 +: 32];
+        assign c_wbe[gp]   = c_wbe_p[gp*4 +: 4];
+    end endgenerate
 
     reg          busy;          // a request was taken and is not done
     reg          taken;         // m_req was high last cycle (downstream may have latched)
