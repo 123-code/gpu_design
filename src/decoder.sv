@@ -86,7 +86,12 @@ module decoder #(
 
     // Bulk copy engine (copy_engine.sv)
     output reg decoded_tma,        // TMA Rs,Rt,#n : ADDB with instruction[10]
-    output reg decoded_tmawait     // TMAWAIT      : RET with bit 2 (0xF004)
+    output reg decoded_tmawait,    // TMAWAIT      : RET with bit 2 (0xF004)
+    output reg decoded_tma_global, // TMAG: the TMA source is global memory
+
+    // LDG/STG: the load/store addresses global (SDRAM) memory through the L1
+    // (LDR with imm bit 4, STR with rd field bit 1)
+    output reg decoded_global
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -160,6 +165,8 @@ module decoder #(
             decoded_tc_op <= 0;
             decoded_tma <= 0;
             decoded_tmawait <= 0;
+            decoded_tma_global <= 0;
+            decoded_global <= 0;
 
         end else begin
             // Only decode in the DECODE stage (4-bit state = 0011)
@@ -212,6 +219,8 @@ module decoder #(
                 decoded_tc_op <= 0;
                 decoded_tma <= 0;
                 decoded_tmawait <= 0;
+                decoded_tma_global <= 0;
+                decoded_global <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -297,6 +306,8 @@ module decoder #(
                         // LDS Rd,[Rs]: bit 5 of the (otherwise unused) low
                         // field picks shared memory, 16-bit halfword
                         decoded_shared           <= instruction[5];
+                        // LDG Rd,[Rs]: bit 4 picks global memory, halfword
+                        decoded_global           <= instruction[4];
                     end
                     MACL: begin
                         // rd field (unused by MACL) selects:
@@ -344,7 +355,10 @@ module decoder #(
                         // instruction[10] = 1 instead makes it TMA: copy
                         // imm[5:3] words (0 = 8) from data memory at [rs] to
                         // shared memory at [rt], asynchronously.
-                        if (instruction[10])      decoded_tma       <= 1;
+                        if (instruction[10]) begin
+                            decoded_tma        <= 1;
+                            decoded_tma_global <= instruction[9];  // TMAG
+                        end
                         else if (instruction[11]) decoded_wbase_add <= 1;
                         else                      decoded_base_add  <= 1;
                     end
@@ -355,6 +369,8 @@ module decoder #(
                         // STS Rt,[Rs]: rd field (unused by STR) bit 0 picks
                         // shared memory, 16-bit halfword
                         decoded_shared           <= instruction[9];
+                        // STG Rt,[Rs]: rd field bit 1 picks global memory
+                        decoded_global           <= instruction[10];
                     end
                     RET: begin 
                         if (instruction[0] == 1'b1) begin

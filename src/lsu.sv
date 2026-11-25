@@ -18,6 +18,7 @@ module lsu #(
     input wire decoded_base_add,         // 1 = ADDB  read window (read base  += immediate)
     input wire decoded_wbase_add,        // 1 = WBASE slide read window forward (write base += immediate)
     input wire decoded_shared,           // 1 = LDS/STS: the shared-memory address space
+    input wire decoded_global,           // 1 = LDG/STG: global (SDRAM) memory, via the L1
     input wire [DATA_BITS-1:0] decoded_immediate,  // amount to add to a base
 
     // Data Pins (From Registers)
@@ -27,7 +28,7 @@ module lsu #(
     // Highway to Arbiter/FIFO (reads)
     output reg mem_valid,                // LSU requests data"
     output reg [ADDR_BITS-1:0] mem_addr,//memory address to be read from the LSU
-    output reg mem_space,                // 0 = main memory, 1 = shared memory
+    output reg [1:0] mem_space,          // 0 = main, 1 = shared, 2 = global memory
     output reg [7:0] mem_write_data,
     input wire mem_ready,                // "flag from memory controller indicating the data has been sent"
     input wire [15:0] mem_read_data,     // byte (main, zero-extended) or halfword (shared)
@@ -39,7 +40,7 @@ module lsu #(
     output reg                  we_req,
     output reg [ADDR_BITS-1:0]  waddr,
     output reg [15:0]           wdata,    // main memory stores the low byte
-    output reg                  we_space, // 0 = main memory, 1 = shared memory
+    output reg [1:0]            we_space, // 0 = main, 1 = shared, 2 = global memory
     input  wire                 wgrant,   // 1-cycle ack from the write arbiter
 
     // Memory-mapped emit (STR to offset 63 -> UART TX). Handshake throttles the
@@ -64,6 +65,7 @@ module lsu #(
     reg active_is_read;
     reg active_is_write;
     reg active_is_shared;
+    reg active_is_global;
 
     always @(posedge clk) begin
         if (reset) begin
@@ -80,6 +82,7 @@ module lsu #(
             mem_space <= 0;
             we_space <= 0;
             active_is_shared <= 0;
+            active_is_global <= 0;
             
             we_req <= 0;
             waddr <= '0;
@@ -102,6 +105,7 @@ module lsu #(
                 // hazard). Defer the actual issue to state 01.
                 2'b00: if (core_state == 4'b0100 && thread_active && warp_active) begin
                     active_is_shared <= decoded_shared;
+                    active_is_global <= decoded_global;
                     if (decoded_mem_read) begin
                         active_is_read  <= 1'b1;
                         active_is_write <= 1'b0;
@@ -118,15 +122,16 @@ module lsu #(
                     if (active_is_read) begin
                         // LDS addresses shared memory directly (no base);
                         // LDR is base-relative into main memory.
+                        // LDG addresses global memory directly too.
                         mem_valid <= 1'b1;
-                        mem_space <= active_is_shared;
-                        mem_addr  <= active_is_shared ? rs[ADDR_BITS-1:0]
-                                                      : base + rs[ADDR_BITS-1:0];
+                        mem_space <= active_is_global ? 2'd2 : {1'b0, active_is_shared};
+                        mem_addr  <= (active_is_shared || active_is_global) ? rs[ADDR_BITS-1:0]
+                                                                            : base + rs[ADDR_BITS-1:0];
                         lsu_state <= 2'b10;
                     end else begin
-                        if (active_is_shared) begin
-                            we_req    <= 1'b1;             // STS: halfword to shared
-                            we_space  <= 1'b1;
+                        if (active_is_shared || active_is_global) begin
+                            we_req    <= 1'b1;             // STS / STG: halfword
+                            we_space  <= active_is_global ? 2'd2 : 2'd1;
                             waddr     <= rs[ADDR_BITS-1:0];
                             wdata     <= rt;
                             lsu_state <= 2'b10;
@@ -136,7 +141,7 @@ module lsu #(
                             lsu_state  <= 2'b10;
                         end else begin
                             we_req    <= 1'b1;             // request a BRAM write
-                            we_space  <= 1'b0;
+                            we_space  <= 2'd0;
                             waddr     <= wbase + rs[ADDR_BITS-1:0];
                             wdata     <= rt;               // byte-wide memory: low byte lands
                             lsu_state <= 2'b10;            // wait for the arbiter grant

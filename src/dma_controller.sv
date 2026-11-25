@@ -28,6 +28,10 @@ module dma_controller #(
     output reg  [7:0]           instr_waddr,
     output reg  [15:0]          instr_wdata,
 
+    // ---- global-memory payload (header data_size bit 15): one byte per pulse,
+    //      at mem_waddr / mem_wdata, instead of mem_we ----
+    output reg                  g_we,
+
     // ---- launch config: gridDim from the header (see S_HEADER_INSTR_H) ----
     output reg  [7:0]           grid_dim,
 
@@ -49,7 +53,7 @@ module dma_controller #(
     reg                  gpu_done_d;    // for rising-edge detection of gpu_done
     
     reg [15:0]           instr_size;    // How many 16-bit instruction WORDS
-    reg [15:0]           data_size;     // How many bytes of data
+    reg [15:0]           data_size;     // How many bytes of data (bit 15: to global memory)
     
     reg [15:0]           instr_wdata_reg; // Holds the first half of a 16-bit instruction
     reg                  byte_toggle;     // 0 = low byte, 1 = high byte
@@ -67,11 +71,13 @@ module dma_controller #(
             byte_toggle <= 1'b0;
             gpu_done_d <= 1'b0;
             grid_dim   <= 8'd0;
+            g_we       <= 1'b0;
         end else begin
             gpu_done_d <= gpu_done;
             gpu_start  <= 1'b0;          // 1-cycle pulse by default
             mem_we     <= 1'b0;
             instr_we   <= 1'b0;
+            g_we       <= 1'b0;
 
             case (state)
                 // ============================================================
@@ -147,8 +153,8 @@ module dma_controller #(
 
                             if (wptr == instr_size - 1) begin
                                 wptr  <= '0;
-                                state <= (data_size == 0) ? S_RUN : S_LOAD_DATA;
-                                if (data_size == 0) gpu_start <= 1'b1;
+                                state <= (data_size[14:0] == 0) ? S_RUN : S_LOAD_DATA;
+                                if (data_size[14:0] == 0) gpu_start <= 1'b1;
                             end else begin
                                 wptr <= wptr + 1'b1;
                             end
@@ -161,12 +167,16 @@ module dma_controller #(
                 // ============================================================
                 S_LOAD_DATA: begin
                     loading <= 1'b1;
-                    if (data_size == 0) begin
+                    if (data_size[14:0] == 0) begin
                         gpu_start <= 1'b1;
                         loading <= 1'b0;
                         state <= S_RUN;
                     end else if (rx_valid) begin
-                        mem_we    <= 1'b1;
+                        // bit 15 of data_size sends the payload to global
+                        // memory (SDRAM, shared by all cores) instead of
+                        // the cores' data memories
+                        mem_we    <= !data_size[15];
+                        g_we      <= data_size[15];
                         mem_waddr <= wptr;
                         mem_wdata <= rx_byte;
 

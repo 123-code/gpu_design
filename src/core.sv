@@ -33,6 +33,17 @@ module core #(
     output wire [7:0] instruction_address, // Asking the ROM for code
     input wire [15:0] current_instruction, // Receiving the code from ROM
 
+    // Global-memory port (SDRAM, shared by every core; see top.sv)
+    output wire        g_req,
+    output wire        g_we,
+    output wire [20:0] g_addr,
+    output wire [31:0] g_wdata,
+    output wire [3:0]  g_wbe,
+    input  wire        g_ack,
+    input  wire        g_rvalid,
+    input  wire [31:0] g_rdata,
+    input  wire        g_done,
+
     // Debug tap: thread 0's R3 (the accumulator) for the LED display
     output wire [7:0] result,
     // Debug tap: the scheduler FSM state, for hardware bring-up visibility
@@ -86,7 +97,8 @@ module core #(
     wire decoded_bar;      // BAR
     wire decoded_mma, decoded_tcfg, decoded_tld, decoded_tldq, decoded_tc_op;
     wire tc_busy;
-    wire decoded_tma, decoded_tmawait;
+    wire decoded_tma, decoded_tmawait, decoded_tma_global;
+    wire decoded_global;   // LDG/STG
     wire tma_busy;
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
     
@@ -145,6 +157,8 @@ module core #(
         .decoded_tc_op(decoded_tc_op),
         .decoded_tma(decoded_tma),
         .decoded_tmawait(decoded_tmawait),
+        .decoded_tma_global(decoded_tma_global),
+        .decoded_global(decoded_global),
         .decoded_mac_byte(decoded_mac_byte)
     );
 
@@ -217,16 +231,19 @@ module core #(
     wire [DATA_BITS-1:0] active_alu_out [THREADS_PER_BLOCK-1:0];
 
     // Flattened arrays for LSU Arbiter
+    // LSU addresses are 16 bits (the global space is 64 KB); main memory
+    // uses the low ADDR_BITS, shared memory the low 10.
+    localparam LA = 16;
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] lsu_req;
-    wire [ADDR_BITS-1:0] lsu_addr [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
-    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] lsu_space;
+    wire [LA-1:0] lsu_addr [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [1:0] lsu_space [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] arb_ready;
     wire [15:0] arb_rdata [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
 
     // Per-warp/thread wires for LSU
     wire lsu_mem_valid [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire lsu_mem_space [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire [ADDR_BITS-1:0] lsu_mem_addr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [1:0] lsu_mem_space [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [LA-1:0] lsu_mem_addr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [7:0] lsu_mem_write_data [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
     wire lsu_emit_valid [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
@@ -274,17 +291,61 @@ module core #(
     endgenerate
 
     wire lsu_we [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire lsu_we_space [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
-    wire [ADDR_BITS-1:0] lsu_waddr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [1:0] lsu_we_space [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
+    wire [LA-1:0] lsu_waddr [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
     wire [15:0] lsu_wdata [WARPS_PER_CORE-1:0][THREADS_PER_BLOCK-1:0];
 
     // Per-lane write requests serialized onto the single memory write port by the
     // write arbiter (mirrors the read arbiter above). This is what lets every lane
     // store its own result instead of only thread 0 (e.g. one neuron per lane).
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] we_req_flat;
-    wire [ADDR_BITS-1:0] waddr_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+    wire [LA-1:0]        waddr_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
     wire [15:0]          wdata_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
-    wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] wspace_flat;
+    wire [1:0]           wspace_flat [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0];
+
+    // ==========================================
+    // L1 CACHE + GLOBAL PORT
+    // ==========================================
+    // LDG/STG go through a 256-byte L1 (l1_cache.sv). The L1 and the copy
+    // engine (TMAG line reads) share the core's one port to global memory.
+    wire        l1_rd_req, l1_rd_ack, l1_wr_req, l1_wr_ack;
+    wire [15:0] l1_rd_addr, l1_rd_data, l1_wr_addr, l1_wr_data;
+    wire        l1m_req, l1m_we, l1m_ack, l1m_rvalid, l1m_done;
+    wire [20:0] l1m_addr;
+    wire [31:0] l1m_wdata;
+    wire [3:0]  l1m_wbe;
+    wire [15:0] l1_hits, l1_misses;
+    l1_cache u_l1 (
+        .clk(clk), .reset(reset),
+        .rd_req(l1_rd_req), .rd_addr(l1_rd_addr), .rd_ack(l1_rd_ack), .rd_data(l1_rd_data),
+        .wr_req(l1_wr_req), .wr_addr(l1_wr_addr), .wr_data(l1_wr_data), .wr_ack(l1_wr_ack),
+        .m_req(l1m_req), .m_we(l1m_we), .m_addr(l1m_addr), .m_wdata(l1m_wdata), .m_wbe(l1m_wbe),
+        .m_ack(l1m_ack), .m_rvalid(l1m_rvalid), .m_rdata(g_rdata), .m_done(l1m_done),
+        .hits(l1_hits), .misses(l1_misses)
+    );
+    wire        engm_req, engm_ack, engm_rvalid, engm_done;
+    wire [20:0] engm_addr;
+    wire [1:0]  gp_ack, gp_rvalid, gp_done;
+    wire [20:0] gp_addr  [1:0];
+    wire [31:0] gp_wdata [1:0];
+    wire [3:0]  gp_wbe   [1:0];
+    assign gp_addr[0] = l1m_addr;   assign gp_addr[1] = engm_addr;
+    assign gp_wdata[0] = l1m_wdata; assign gp_wdata[1] = 32'd0;
+    assign gp_wbe[0] = l1m_wbe;     assign gp_wbe[1] = 4'd0;
+    mem_arb #(.N(2)) u_gport (
+        .clk(clk), .reset(reset),
+        .c_req({engm_req, l1m_req}),
+        .c_we({1'b0, l1m_we}),
+        .c_addr(gp_addr),
+        .c_wdata(gp_wdata),
+        .c_wbe(gp_wbe),
+        .c_ack(gp_ack), .c_rvalid(gp_rvalid), .c_done(gp_done),
+        .m_req(g_req), .m_we(g_we), .m_addr(g_addr), .m_wdata(g_wdata), .m_wbe(g_wbe),
+        .m_ack(g_ack), .m_rvalid(g_rvalid), .m_done(g_done)
+    );
+    assign {engm_ack, l1m_ack}       = gp_ack;
+    assign {engm_rvalid, l1m_rvalid} = gp_rvalid;
+    assign {engm_done, l1m_done}     = gp_done;
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] wgrant_flat;
 
     // ==========================================
@@ -341,7 +402,7 @@ module core #(
 
     lsu_write_arbiter #(
         .THREADS(WARPS_PER_CORE * THREADS_PER_BLOCK),
-        .ADDR_BITS(ADDR_BITS)
+        .ADDR_BITS(LA)
     ) core_lsu_write_arbiter (
         .clk(clk),
         .reset(reset),
@@ -350,6 +411,10 @@ module core #(
         .wdata(wdata_flat),
         .space(wspace_flat),
         .hold(eng_wr_req),
+        .g_wreq(l1_wr_req),
+        .g_waddr(l1_wr_addr),
+        .g_wdata(l1_wr_data),
+        .g_wack(l1_wr_ack),
         .mem_we(mem_we),
         .mem_waddr(mem_waddr),
         .mem_wdata(mem_wdata),
@@ -363,7 +428,7 @@ module core #(
     // Shared Arbiter (handles all warps and threads simultaneously)
     lsu_arbiter #(
         .THREADS(WARPS_PER_CORE * THREADS_PER_BLOCK),
-        .ADDR_BITS(ADDR_BITS)
+        .ADDR_BITS(LA)
     ) core_lsu_arbiter (
         .clk(clk),
         .reset(reset),
@@ -373,6 +438,10 @@ module core #(
         .hold(sh_rd_hold || eng_rd_req),
         .sh_busy(arb_sh_busy),
         .mem_busy(arb_mem_busy),
+        .g_req(l1_rd_req),
+        .g_addr(l1_rd_addr),
+        .g_ack(l1_rd_ack),
+        .g_rdata(l1_rd_data),
         .mem_raddr(arb_mem_raddr),
         .mem_rdata(mem_rdata),
         .sh_raddr(arb_sh_raddr),
@@ -530,7 +599,15 @@ module core #(
         .src(rs_bus[current_warp][0][ADDR_BITS-1:0]),
         .dst(rt_bus[current_warp][0][9:0]),
         .nwords((decoded_immediate[5:3] == 3'd0) ? 4'd8 : {1'b0, decoded_immediate[5:3]}),
+        .src_global(decoded_tma_global),
+        .gsrc(rs_bus[current_warp][0]),
         .busy(tma_busy),
+        .m_req(engm_req),
+        .m_addr(engm_addr),
+        .m_ack(engm_ack),
+        .m_rvalid(engm_rvalid),
+        .m_rdata(g_rdata),
+        .m_done(engm_done),
         .rd_req(eng_rd_req),
         .rd_gnt(eng_rd_gnt),
         .rd_addr(eng_rd_addr),
@@ -621,7 +698,7 @@ module core #(
                     .debug_reg3(reg3_bus[w][i])
                 );
 
-                lsu #(.ADDR_BITS(ADDR_BITS), .DATA_BITS(DATA_BITS)) thread_lsu (
+                lsu #(.ADDR_BITS(LA), .DATA_BITS(DATA_BITS)) thread_lsu (
                     .clk(clk),
                     .reset(reset), 
                     .enable(1'b1),
@@ -634,6 +711,7 @@ module core #(
                     .decoded_base_add(decoded_base_add),
                     .decoded_wbase_add(decoded_wbase_add),
                     .decoded_shared(decoded_shared),
+                    .decoded_global(decoded_global),
                     .decoded_immediate(decoded_immediate),
 
                     .rs(rs_bus[w][i]),

@@ -27,13 +27,19 @@ module lsu_write_arbiter #(
     input  wire [THREADS-1:0]      we_req,                // held until granted
     input  wire [ADDR_BITS-1:0]    waddr [THREADS-1:0],
     input  wire [15:0]             wdata [THREADS-1:0],
-    input  wire [THREADS-1:0]      space,                 // 1 = shared memory
+    input  wire [1:0]              space [THREADS-1:0],   // 0 main, 1 shared, 2 global
 
     input  wire                    hold,
 
     // ---- main memory write port ----
+    // ---- global memory (the core's L1 write buffer; takes it or not, same cycle) ----
+    output wire                 g_wreq,
+    output wire [15:0]          g_waddr,
+    output wire [15:0]          g_wdata,
+    input  wire                 g_wack,
+
     output reg                  mem_we,
-    output reg  [ADDR_BITS-1:0] mem_waddr,
+    output reg  [12:0]          mem_waddr,
     output reg  [7:0]           mem_wdata,
 
     // ---- shared memory write port ----
@@ -64,6 +70,12 @@ module lsu_write_arbiter #(
             if (pending[k]) begin sel = k[IDX-1:0]; any = 1'b1; end
     end
 
+    // A global store goes to the L1 combinationally and is granted when the
+    // write buffer takes it (g_wack); until then the lane keeps waiting.
+    assign g_wreq  = any && !hold && (space[sel] == 2'd2);
+    assign g_waddr = waddr[sel][15:0];
+    assign g_wdata = wdata[sel];
+
     always @(posedge clk) begin
         if (reset) begin
             mem_we        <= 1'b0;
@@ -80,15 +92,17 @@ module lsu_write_arbiter #(
             last_grant_oh <= '0;
             mem_we        <= 1'b0;
             sh_we         <= 1'b0;
-            if (any && !hold) begin
-                if (space[sel]) begin
+            if (any && !hold && (space[sel] != 2'd2 || g_wack)) begin
+                if (space[sel] == 2'd2) begin
+                    // taken by the L1 this cycle
+                end else if (space[sel] == 2'd1) begin
                     sh_we    <= 1'b1;
                     sh_waddr <= waddr[sel][9:2];
                     sh_wdata <= {wdata[sel], wdata[sel]};
                     sh_wbe   <= waddr[sel][1] ? 4'b1100 : 4'b0011;
                 end else begin
                     mem_we    <= 1'b1;     // commit this lane's write this cycle
-                    mem_waddr <= waddr[sel];
+                    mem_waddr <= waddr[sel][12:0];
                     mem_wdata <= wdata[sel][7:0];
                 end
                 wgrant[sel] <= 1'b1;       // ack the granted lane

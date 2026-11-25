@@ -33,7 +33,11 @@ module top #(
     parameter BAUD_RATE     = 115200, //baud rate
     parameter BLOCK_DIM     = 8,         // launch size: threads per block (warps x TPB lanes)
     parameter THREADS_PER_BLOCK = 4,     // warp width = physical ALU lanes per core
-    parameter WARPS_PER_CORE = 2         // warps/core (1 = no latency hiding, max compute/LUT)
+    parameter WARPS_PER_CORE = 2,        // warps/core (1 = no latency hiding, max compute/LUT)
+    // SDRAM: 200 us power-up wait at 54 MHz, refresh well inside 15.6 us.
+    // Testbenches shrink the wait.
+    parameter SDRAM_INIT_CYCLES = 10800,
+    parameter SDRAM_REF_CYCLES  = 750
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
@@ -42,7 +46,19 @@ module top #(
     output wire       tmds_clk_p,    // HDMI            (PINs 33-40)
     output wire       tmds_clk_n,
     output wire [2:0] tmds_d_p,
-    output wire [2:0] tmds_d_n
+    output wire [2:0] tmds_d_n,
+    // In-package SDRAM (GW2AR-18: 64 Mbit, 2M x 32). Port names follow the
+    // Tang Nano 20K examples, which the vendor flow binds to the die's SDRAM.
+    output wire        O_sdram_clk,
+    output wire        O_sdram_cke,
+    output wire        O_sdram_cs_n,
+    output wire        O_sdram_cas_n,
+    output wire        O_sdram_ras_n,
+    output wire        O_sdram_wen_n,
+    output wire [3:0]  O_sdram_dqm,
+    output wire [10:0] O_sdram_addr,
+    output wire [1:0]  O_sdram_ba,
+    inout  wire [31:0] IO_sdram_dq
 );
     // ---- system clock: 27 MHz crystal pin -> 54 MHz via the rPLL ----
     // (gowin_pll is a transparent pass-through in simulation, so tbs drive sys_clk
@@ -60,6 +76,15 @@ module top #(
 
     // ---- Host-to-Device pipeline ----
     wire [7:0]  grid_dim;             // blocks in the launch (frame header)
+    wire        dma_g_we;             // a payload byte for global memory
+    wire [12:0] dma_g_addr;
+    wire [7:0]  dma_g_data;
+    // global-memory clients: 0 = core 0, 1 = core 1, 2 = DMA (see below)
+    wire [2:0]  g_req, g_we_c, g_ack, g_rvalid, g_done;
+    wire [20:0] g_addr_c  [2:0];
+    wire [31:0] g_wdata_c [2:0];
+    wire [3:0]  g_wbe_c   [2:0];
+    wire [31:0] sd_rdata;
     wire        gpu_start, loading; // gpu start is high when the image was loaded loading is high while image is still loading from dma
     wire        instr_we;
     wire [7:0]  instr_waddr;
@@ -90,6 +115,9 @@ module top #(
         .gpu_start(gpu_start),
         .loading(loading),
         .grid_dim(grid_dim),
+        .dma_g_we(dma_g_we),
+        .dma_g_addr(dma_g_addr),
+        .dma_g_data(dma_g_data),
         .instr_we(instr_we),
         .instr_waddr(instr_waddr),
         .instr_wdata(instr_wdata),
@@ -157,10 +185,62 @@ module top #(
         .mem_we_1(gpu_we_1),
         .mem_waddr_1(gpu_waddr_1),
         .mem_wdata_1(gpu_wdata_1),
+        .g0_req(g_req[0]), .g0_we(g_we_c[0]), .g0_addr(g_addr_c[0]), .g0_wdata(g_wdata_c[0]),
+        .g0_wbe(g_wbe_c[0]), .g0_ack(g_ack[0]), .g0_rvalid(g_rvalid[0]), .g0_rdata(sd_rdata),
+        .g0_done(g_done[0]),
+        .g1_req(g_req[1]), .g1_we(g_we_c[1]), .g1_addr(g_addr_c[1]), .g1_wdata(g_wdata_c[1]),
+        .g1_wbe(g_wbe_c[1]), .g1_ack(g_ack[1]), .g1_rvalid(g_rvalid[1]), .g1_rdata(sd_rdata),
+        .g1_done(g_done[1]),
         .emit_valid(emit_valid),
         .emit_data(emit_data),
         .emit_ready(emit_ready)
     );
+
+    // ---- global memory: the in-package SDRAM, shared by both cores and the host ----
+    // Clients: core 0, core 1 (each already muxing its L1 and copy engine),
+    // and the DMA writing a global payload. Round-robin, one op at a time.
+    wire        sd_req, sd_we, sd_ack, sd_rvalid, sd_done, sd_init_done;
+    wire [20:0] sd_addr;
+    wire [31:0] sd_wdata;
+    wire [3:0]  sd_wbe;
+
+    // DMA byte -> one masked word write (bytes arrive far slower than a write takes)
+    reg        dg_req = 1'b0;
+    reg [12:0] dg_addr;
+    reg [7:0]  dg_data;
+    always @(posedge sys_clk) begin
+        if (sys_reset) dg_req <= 1'b0;
+        else if (dma_g_we) begin
+            dg_req <= 1'b1; dg_addr <= dma_g_addr; dg_data <= dma_g_data;
+        end else if (g_ack[2]) dg_req <= 1'b0;
+    end
+    assign g_req[2]     = dg_req;
+    assign g_we_c[2]    = 1'b1;
+    assign g_addr_c[2]  = {10'd0, dg_addr[12:2]};
+    assign g_wdata_c[2] = {4{dg_data}};
+    assign g_wbe_c[2]   = 4'b0001 << dg_addr[1:0];
+
+    mem_arb #(.N(3)) u_garb (
+        .clk(sys_clk), .reset(sys_reset),
+        .c_req(g_req), .c_we(g_we_c), .c_addr(g_addr_c), .c_wdata(g_wdata_c), .c_wbe(g_wbe_c),
+        .c_ack(g_ack), .c_rvalid(g_rvalid), .c_done(g_done),
+        .m_req(sd_req), .m_we(sd_we), .m_addr(sd_addr), .m_wdata(sd_wdata), .m_wbe(sd_wbe),
+        .m_ack(sd_ack), .m_rvalid(sd_rvalid), .m_done(sd_done)
+    );
+
+    sdram_ctrl #(.INIT_CYCLES(SDRAM_INIT_CYCLES), .REF_INTERVAL(SDRAM_REF_CYCLES)) u_sdram (
+        .clk(sys_clk), .reset(sys_reset),
+        .req(sd_req), .we(sd_we), .addr(sd_addr), .wdata(sd_wdata), .wbe(sd_wbe),
+        .ack(sd_ack), .rvalid(sd_rvalid), .rdata(sd_rdata), .done(sd_done),
+        .init_done(sd_init_done),
+        .sdram_cke(O_sdram_cke), .sdram_cs_n(O_sdram_cs_n), .sdram_ras_n(O_sdram_ras_n),
+        .sdram_cas_n(O_sdram_cas_n), .sdram_we_n(O_sdram_wen_n), .sdram_ba(O_sdram_ba),
+        .sdram_addr(O_sdram_addr), .sdram_dqm(O_sdram_dqm), .sdram_dq(IO_sdram_dq)
+    );
+    // SDRAM clocked 180 degrees from the controller: commands launched on a
+    // sys_clk edge are sampled mid-cycle, read data is sampled a half cycle
+    // after the chip drives it.
+    assign O_sdram_clk = ~sys_clk;
 
 //fsm,pulses tx_start once to start uart_txand waits while busy then pulses emit ready so gpu can send the next byte
     wire uart_busy;

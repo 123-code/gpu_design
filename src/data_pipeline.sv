@@ -25,6 +25,11 @@ module data_pipeline #(
     output wire                 loading,      // high while the DMA owns memory
     output wire [7:0]           grid_dim,     // gridDim from the frame header
 
+    // global-memory payload bytes (header data_size bit 15)
+    output wire                 dma_g_we,
+    output wire [ADDR_BITS-1:0] dma_g_addr,
+    output wire [7:0]           dma_g_data,
+
     // Instruction memory write ports (from DMA)
     output wire                 instr_we,
     output wire [7:0]           instr_waddr,
@@ -75,6 +80,7 @@ module data_pipeline #(
         .mem_we(dma_we), .mem_waddr(dma_waddr), .mem_wdata(dma_wdata),
         .instr_we(instr_we), .instr_waddr(instr_waddr), .instr_wdata(instr_wdata),
         .grid_dim(grid_dim),
+        .g_we(dma_g_we),
         .loading(loading)
     );
 
@@ -83,6 +89,9 @@ module data_pipeline #(
     // memory copies at the same address, so the two cores run the same program
     // over identical data (block_id is the only per-core difference). While
     // running, each core owns its own write port.
+    assign dma_g_addr = dma_waddr;
+    assign dma_g_data = dma_wdata;
+
     wire                 mem_we    = loading ? dma_we    : gpu_we;
     wire [ADDR_BITS-1:0] mem_waddr = loading ? dma_waddr : gpu_waddr;
     wire [7:0]           mem_wdata = loading ? dma_wdata : gpu_wdata;

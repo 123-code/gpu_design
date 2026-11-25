@@ -30,14 +30,20 @@ module lsu_arbiter #(
     // ---- requests from the thread LSUs ----
     input  wire [THREADS-1:0]      req,                  // mem_valid[i]
     input  wire [ADDR_BITS-1:0]    addr  [THREADS-1:0],  // full mem_addr[i] (base+offset)
-    input  wire [THREADS-1:0]      space,                // 1 = shared memory
+    input  wire [1:0]              space [THREADS-1:0],  // 0 main, 1 shared, 2 global
 
     input  wire                 hold,                    // accept no new request
     output wire                 sh_busy,                 // a shared read is in flight
     output wire                 mem_busy,                // a main-memory read is in flight
 
+    // ---- global memory (the core's L1): variable latency, req held until ack ----
+    output reg                  g_req,
+    output reg  [15:0]          g_addr,
+    input  wire                 g_ack,
+    input  wire [15:0]          g_rdata,
+
     // ---- main memory read port ----
-    output reg  [ADDR_BITS-1:0] mem_raddr,
+    output reg  [12:0]          mem_raddr,
     input  wire [7:0]           mem_rdata,
 
     // ---- shared memory read port (word address) ----
@@ -53,15 +59,16 @@ module lsu_arbiter #(
 
     localparam S_IDLE = 2'd0,
                S_WAIT = 2'd1,    // BRAM 1-cycle read latency
-               S_RESP = 2'd2;    // data valid, pulse ready
+               S_RESP = 2'd2,    // data valid, pulse ready
+               S_GWAIT = 2'd3;   // global load: wait for the L1
 
     reg [1:0]       state;
     reg [IDX-1:0]   svc;         // thread currently being served
-    reg             svc_space;   // ... and which memory it reads
+    reg [1:0]       svc_space;   // ... and which memory it reads
     reg             svc_hi;      // shared: upper halfword of the word
 
-    assign sh_busy  = (state != S_IDLE) && svc_space;
-    assign mem_busy = (state != S_IDLE) && !svc_space;
+    assign sh_busy  = (state != S_IDLE) && (svc_space == 2'd1);
+    assign mem_busy = (state != S_IDLE) && (svc_space == 2'd0);
 
     // Lowest set request bit (iterate high->low so the lowest index wins).
     integer k;
@@ -81,8 +88,10 @@ module lsu_arbiter #(
             mem_raddr <= '0;
             sh_raddr  <= 8'd0;
             svc       <= '0;
-            svc_space <= 1'b0;
+            svc_space <= 2'd0;
             svc_hi    <= 1'b0;
+            g_req     <= 1'b0;
+            g_addr    <= 16'd0;
             for (j = 0; j < THREADS; j = j + 1) rdata[j] <= 16'd0;
         end else begin
             ready <= '0;                           // ready is a 1-cycle pulse
@@ -92,19 +101,32 @@ module lsu_arbiter #(
                             svc       <= sel;
                             svc_space <= space[sel];
                             svc_hi    <= addr[sel][1];
-                            if (space[sel]) sh_raddr  <= addr[sel][9:2];
-                            else            mem_raddr <= addr[sel];   // base+offset
-                            state     <= S_WAIT;
+                            if (space[sel] == 2'd2) begin
+                                g_req  <= 1'b1;               // LDG -> L1
+                                g_addr <= addr[sel][15:0];
+                                state  <= S_GWAIT;
+                            end else begin
+                                if (space[sel] == 2'd1) sh_raddr  <= addr[sel][9:2];
+                                else                    mem_raddr <= addr[sel][12:0];
+                                state     <= S_WAIT;
+                            end
                         end
 
                 S_WAIT: state <= S_RESP;              // wait out BRAM read latency
 
                 S_RESP: begin
                             ready[svc] <= 1'b1;       // data valid this beat
-                            rdata[svc] <= !svc_space ? {8'd0, mem_rdata}
+                            rdata[svc] <= (svc_space == 2'd0) ? {8'd0, mem_rdata}
                                         : svc_hi     ? sh_rdata[31:16]
                                         :              sh_rdata[15:0];
                             state      <= S_IDLE;      // look for the next request
+                        end
+
+                S_GWAIT: if (g_ack) begin
+                            g_req      <= 1'b0;
+                            ready[svc] <= 1'b1;
+                            rdata[svc] <= g_rdata;
+                            state      <= S_IDLE;
                         end
 
                 default: state <= S_IDLE;

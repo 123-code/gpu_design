@@ -42,12 +42,21 @@ reg [15:0] host_prog [0:255];
 reg [7:0]  host_data [0:8191];
 
 task automatic send_frame(input integer nwords, input integer nbytes, input integer grid);
+    send_frame_ex(nwords, nbytes, grid, 0);
+endtask
+
+// flags bit 0: the payload goes to global memory (SDRAM), header data_size
+//               bit 15, instead of the cores' data memories
+// flags bit 1: cluster launch (data_size bit 14)
+task automatic send_frame_ex(input integer nwords, input integer nbytes, input integer grid,
+                             input integer flags);
     integer i;
-    reg [15:0] w0;
+    reg [15:0] w0, w1;
     begin
         w0 = nwords[15:0] | (grid[15:0] << 9);
+        w1 = (nbytes + 1) | (flags[0] ? 16'h8000 : 16'h0000) | (flags[1] ? 16'h4000 : 16'h0000);
         uart_send(w0[7:0]); uart_send(w0[15:8]);
-        uart_send((nbytes + 1) % 256); uart_send((nbytes + 1) / 256);
+        uart_send(w1[7:0]); uart_send(w1[15:8]);
         for (i = 0; i < nwords; i = i + 1) begin
             uart_send(host_prog[i][7:0]);
             uart_send(host_prog[i][15:8]);

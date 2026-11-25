@@ -14,6 +14,7 @@ drive each one and the testbench that proves it.
 | [Tensor core + TMEM](#tensor-core--tmem) | 5th-gen tensor core, `tcgen05.mma` / `.ld`, Tensor Memory | `make sim-mma` |
 | [FP8 / FP4 / MX block scaling](#fp8--fp4--mx-block-scaling) | `kind::f8f6f4`, `kind::mxf4` (2nd-gen Transformer Engine) | `make sim-mma-all` |
 | [TMA bulk copy](#tma-bulk-copy) | Tensor Memory Accelerator, `cp.async.bulk` | `make sim-tma` |
+| [Global memory: SDRAM + L1](#global-memory-sdram--l1) | HBM3e + memory controllers, per-SM L1 | `make sim-sdram`, `make sim-global` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -212,6 +213,75 @@ and a non-zero overlap between copy-engine and tensor-core busy cycles.
 | operands staged by TMA (`make sim-tma`) | 1408 |
 
 The tensor core was busy 93 cycles; 25 of them overlapped with a copy.
+
+---
+
+## Global memory: SDRAM + L1
+
+Until now, "memory" meant each core's private 8 KB BRAM, with the DMA
+broadcasting the same payload into both copies. Nothing was shared, and
+nothing was big. A GPU's defining memory is the opposite: one large, slow,
+off-core memory that every SM reads and writes through its own cache.
+
+The Tang Nano 20K's GW2AR-18 has 64 Mbit (2M x 32) of SDR SDRAM inside the
+package, and the design never used it. Now it is global memory:
+
+```
+ core 0 ─ L1 ─┐                 ┌─ copy engine 0 (TMAG)
+              ├─ core 0 port ───┤
+              │                 └─ L1 0 (LDG/STG)
+ core 1 port ─┼─ mem_arb (round robin) ── sdram_ctrl ── SDRAM (2M x 32)
+ host DMA ────┘
+```
+
+- **`src/sdram_ctrl.sv`**: closed-page controller. Power-up sequence
+  (200 us wait, PRECHARGE ALL, two AUTO REFRESH, LOAD MODE: burst 4, CL 2),
+  refresh every 750 cycles, and two operations, both with auto-precharge: a
+  4-word line read and a byte-masked word write. The SDRAM is clocked from
+  the inverted system clock, so commands are sampled mid-cycle.
+- **`src/mem_arb.sv`**: round-robin arbiter, one memory operation at a time.
+  Used twice: in each core (L1 vs. copy engine) and at the top (core 0,
+  core 1, host DMA).
+- **`src/l1_cache.sv`**: per-core 256-byte L1, 16 direct-mapped 16-byte
+  lines (one SDRAM burst). Loads that hit return in 2 cycles; a miss fills
+  the line with one burst. Stores are write-through, no-write-allocate, and
+  *posted*: a one-entry write buffer releases the thread immediately, and a
+  later load waits for it to drain, so a core always sees its own stores.
+  Like a GPU L1 it is not coherent with the other core's; the per-block
+  core reset invalidates it, so each block starts cold.
+- **`TMAG`** is `TMA` from global memory, the source a real TMA reads. It
+  fetches 16-byte lines straight into shared memory, bypassing the L1.
+- **The host can load global memory.** Header `data_size` bit 15 sends the
+  payload to SDRAM instead of the data memories
+  (`send_kernel.py --global`).
+
+| Instruction | Encoding | Meaning |
+|---|---|---|
+| `LDG Rd, [Rs]` | `LDR` with imm bit 4 | Rd = global halfword at byte address Rs (through the L1) |
+| `STG Rt, [Rs]` | `STR` with rd field = 2 | global halfword at byte address Rs = Rt (posted, write-through) |
+| `TMAG Rs, Rd, #n` | `ADDB`, rd field `011` | TMA from global memory [Rs] (16-byte aligned) to shared [Rd] |
+
+**Testing.** `test/sdram_model.sv` is a behavioural model of the SDRAM that
+also *checks the protocol*: commands before LOAD MODE, READ/WRITE to a
+closed bank, ACTIVE to an open bank, tRCD/tRP/tRC, and missed refresh
+deadlines all count as violations. It earned its place immediately: the
+first controller draft set A8 instead of A10 for auto-precharge, and the
+data still came back right; only the model's "ACTIVE to an open bank"
+check (588 of them) exposed it.
+
+- `make sim-sdram`: the controller alone. 300 random byte-masked writes,
+  every touched line read back, more than 30 refreshes interleaved, zero
+  violations.
+- `make sim-global`: the whole path. The host puts operands in SDRAM; a
+  grid of 4 blocks does LDG twice per line (one miss, then L1 hits), STG,
+  then TMAG's the tiles in and runs two MMAs, and every lane STGs its row
+  of D. All four blocks write into the one shared SDRAM, and 1 KB of it is
+  checked byte for byte against `software/gen_global_test.py`. Both L1s
+  must report hits, and the model must report zero violations. A planted
+  bug in the L1 hit path fails the test.
+
+On the board, the SDRAM port names follow the Tang Nano 20K's
+embedded-SDRAM examples. The SDRAM path has not been run on hardware.
 
 ---
 

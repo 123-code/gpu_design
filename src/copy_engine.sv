@@ -20,6 +20,11 @@
 //
 // One copy in flight; a TMA issued while one is running waits for it (the
 // scheduler parks and retries, like a tensor-core op on a busy unit).
+//
+// `TMAG` copies from GLOBAL memory (SDRAM) instead -- the source a real TMA
+// reads. The source must be 16-byte aligned; the engine fetches whole
+// 16-byte lines through the core's global-memory port (bypassing the L1, as
+// bulk copies do) and writes each 32-bit word straight into shared memory.
 // ============================================================================
 module copy_engine #(
     parameter ADDR_BITS = 13
@@ -31,7 +36,17 @@ module copy_engine #(
     input  wire [ADDR_BITS-1:0] src,         // data-memory byte address
     input  wire [9:0]           dst,         // shared byte address (word aligned)
     input  wire [3:0]           nwords,      // 1..8
+    input  wire                 src_global,  // TMAG: src is a global byte address
+    input  wire [15:0]          gsrc,
     output wire                 busy,
+
+    // global-memory port (line reads)
+    output reg                  m_req,
+    output wire [20:0]          m_addr,
+    input  wire                 m_ack,
+    input  wire                 m_rvalid,
+    input  wire [31:0]          m_rdata,
+    input  wire                 m_done,
 
     // data-memory read port (borrowed)
     output wire                 rd_req,
@@ -55,9 +70,13 @@ module copy_engine #(
     reg [1:0]           pend_lane;
     reg [7:0]           pend_word;
     reg                 wr_ok;               // write port drained (asked >= 1 cycle ago)
+    reg                 gmode;               // this copy reads global memory
+    reg [15:0]          g_line;              // byte address of the line being fetched
+    reg [3:0]           g_words;             // words still to land (global mode)
 
     assign busy    = active;
-    assign rd_req  = active && (left != 6'd0);
+    assign rd_req  = active && !gmode && (left != 6'd0);
+    assign m_addr  = {7'd0, g_line[15:4], 2'b00};
     assign wr_req  = active;
     assign rd_addr = s_ptr;
 
@@ -69,17 +88,42 @@ module copy_engine #(
             wr_ok  <= 1'b0;
             left   <= 6'd0;
             inflight_left <= 6'd0;
+            gmode  <= 1'b0;
+            m_req  <= 1'b0;
         end else begin
             sh_we <= 1'b0;
             wr_ok <= active;
             if (!active) begin
                 if (start) begin
                     active        <= 1'b1;
+                    gmode         <= src_global;
+                    g_line        <= {gsrc[15:4], 4'd0};
+                    g_words       <= nwords;
+                    m_req         <= src_global;
                     s_ptr         <= src;
                     d_ptr         <= {dst[9:2], 2'b00};
                     left          <= {nwords, 2'b00};
                     inflight_left <= {nwords, 2'b00};
                     pend          <= 1'b0;
+                end
+            end else if (gmode) begin
+                // global: one 4-word burst per line, each beat one shared word
+                if (m_ack) m_req <= 1'b0;
+                if (m_rvalid && g_words != 4'd0) begin
+                    sh_we    <= 1'b1;
+                    sh_waddr <= d_ptr[9:2];
+                    sh_wdata <= m_rdata;
+                    sh_wbe   <= 4'b1111;
+                    d_ptr    <= d_ptr + 10'd4;
+                    g_words  <= g_words - 4'd1;
+                end
+                if (m_done) begin
+                    if (g_words == 4'd0 || (m_rvalid && g_words == 4'd1)) begin
+                        active <= 1'b0;
+                    end else begin
+                        g_line <= g_line + 16'd16;      // next line
+                        m_req  <= 1'b1;
+                    end
                 end
             end else begin
                 // address the next byte

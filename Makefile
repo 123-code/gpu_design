@@ -6,12 +6,12 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: regress regress-full sim-grid sim-smem sim-mma sim-mma-all sim-tma mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Regression: every self-checking testbench that runs in a few seconds.
 # regress-full adds the minute-scale end-to-end sims and a short fuzz.
 REGRESS = sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp \
-          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma
+          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma sim-sdram sim-global
 REGRESS_FULL = $(REGRESS) sim-mlp2 sim-mnist-jpp-full sim-raycast sim-hdmi
 regress:        ## Run the fast self-checking testbenches; stops at the first FAIL
 	@python3 test/regress.py $(REGRESS)
@@ -233,3 +233,14 @@ sim-tma:        ## TMA: the copy engine stages tensor-core operands while the pr
 	  $(IVERILOG) -g2012 -s tb -o sim_mma test/tb_mma.sv src/*.sv && \
 	  $(VVP) sim_mma +prefix=software/build/tma_$$k +need_overlap | grep -E 'RESULT|overlap|byte'; \
 	done
+
+sim-sdram:      ## SDRAM controller vs the protocol-checking SDRAM model (masked writes, line reads, refresh)
+	$(IVERILOG) -g2012 -s tb -o sim_sdram test/tb_sdram.sv test/sdram_model.sv src/sdram_ctrl.sv
+	$(VVP) sim_sdram
+
+sim-global:     ## Global memory: SDRAM + L1 + LDG/STG + TMAG->MMA, 4 blocks sharing one SDRAM
+	@mkdir -p software/build
+	cd software && python3 gen_global_test.py --out build/global > /dev/null
+	cd software && cargo run --quiet -- build/global.asm build/global.hex > /dev/null
+	$(IVERILOG) -g2012 -s tb -o sim_global test/tb_global.sv test/sdram_model.sv src/*.sv
+	$(VVP) sim_global
