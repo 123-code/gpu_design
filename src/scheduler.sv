@@ -24,6 +24,9 @@ module scheduler #(
     // the warp (it yields) and re-executes once the unit is idle.
     input wire decoded_tc_op,
     input wire tc_busy,
+    // Copy engine: TMA while a copy runs, or TMAWAIT, parks the same way
+    input wire decoded_tma_op,
+    input wire tma_busy,
     input wire decoded_pc_mux,
     input wire [7:0] decoded_immediate,
     input wire [THREADS_PER_BLOCK-1:0] branch_votes,
@@ -65,6 +68,7 @@ module scheduler #(
     endgenerate
     reg [1:0] warp_status [WARPS_PER_CORE-1:0];
     reg [WARPS_PER_CORE-1:0] tc_parked;   // waiting for the tensor core
+    reg [WARPS_PER_CORE-1:0] tma_parked;  // waiting for the copy engine
 
     // Divergence Stacks (Per Warp), SDEPTH reconvergence levels each.
     //
@@ -91,6 +95,7 @@ module scheduler #(
             done <= 0;
             current_warp <= 0;
             tc_parked <= '0;
+            tma_parked <= '0;
             for (integer w = 0; w < WARPS_PER_CORE; w = w + 1) begin
                 warp_pc[w] <= 0;
                 stack_ptr[w*2 +: 2] <= 2'b0;
@@ -129,9 +134,10 @@ module scheduler #(
                 // Wake up if it was waiting and LSU is done (and, if it is
                 // parked on the tensor core, the unit is idle)
                 if (warp_status[w] == WARP_WAITING && !warp_is_waiting[w]
-                        && !(tc_parked[w] && tc_busy)) begin
+                        && !(tc_parked[w] && tc_busy) && !(tma_parked[w] && tma_busy)) begin
                     warp_status[w] <= WARP_READY;
                     tc_parked[w]   <= 1'b0;
+                    tma_parked[w]  <= 1'b0;
                 end
             end
 
@@ -191,6 +197,12 @@ module scheduler #(
                     // instruction when it wakes.
                     warp_status[current_warp] <= WARP_WAITING;
                     tc_parked[current_warp]   <= 1'b1;
+                    core_state <= SELECT_WARP;
+                end else if (decoded_tma_op && tma_busy) begin
+                    // Copy engine busy: TMA waits for the slot, TMAWAIT for
+                    // the copy to land. Park; re-execute when it is idle.
+                    warp_status[current_warp] <= WARP_WAITING;
+                    tma_parked[current_warp]  <= 1'b1;
                     core_state <= SELECT_WARP;
                 end else
                     core_state <= decoded_mem_op ? WAIT : EXECUTE;

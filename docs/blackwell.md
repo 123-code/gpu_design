@@ -13,6 +13,7 @@ drive each one and the testbench that proves it.
 | [Shared memory + barrier](#shared-memory--barrier) | `__shared__`, `__syncthreads()` | `make sim-smem` |
 | [Tensor core + TMEM](#tensor-core--tmem) | 5th-gen tensor core, `tcgen05.mma` / `.ld`, Tensor Memory | `make sim-mma` |
 | [FP8 / FP4 / MX block scaling](#fp8--fp4--mx-block-scaling) | `kind::f8f6f4`, `kind::mxf4` (2nd-gen Transformer Engine) | `make sim-mma-all` |
+| [TMA bulk copy](#tma-bulk-copy) | Tensor Memory Accelerator, `cp.async.bulk` | `make sim-tma` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -175,6 +176,42 @@ and deterministic. Its limit is range: D is a 32-bit Q.8.
 codes (every e4m3 exponent, every e2m1 code, MX scales spread so the shift
 clamp is hit from both sides), checked against the model byte for byte on
 both cores. Seeds 1-3 pass for all four kinds.
+
+---
+
+## TMA bulk copy
+
+Feeding a tensor core one `LDR`/`STS` at a time wastes the threads: the
+copy loop in the tensor-core test spends more instructions moving operands
+than doing math. Hopper and Blackwell hand that job to the Tensor Memory
+Accelerator, an engine that moves whole tiles into shared memory on its own
+while the threads keep issuing.
+
+`src/copy_engine.sv` is that engine at this scale:
+
+| Instruction | Encoding | Meaning |
+|---|---|---|
+| `TMA Rs, Rd, #n` | `ADDB` with instruction[10] | copy n words (1..8, 4..32 bytes) from data memory [Rs] to shared memory [Rd], in the background |
+| `TMAWAIT` | `0xF004` (`RET` with bit 2) | park until every copy this core issued has landed |
+
+The engine streams one byte per cycle. It borrows the core's data-memory
+read port (the LSU read arbiter holds off new requests and the engine takes
+the port once no LSU read is in flight) and the shared-memory write port
+(the LSU write arbiter grants nothing while the engine is active). One copy
+is in flight at a time; a `TMA` issued while one runs, or a `TMAWAIT`, parks
+the warp the same way a tensor-core instruction on a busy unit does.
+
+`make sim-tma` reruns the tensor-core test for every kind, with the copy loop
+replaced by `TMA`. The kernel is double-buffered: the next pair of tiles
+streams in while the first MMA runs. The test requires both the exact result
+and a non-zero overlap between copy-engine and tensor-core busy cycles.
+
+| s8 kernel (both cores, from launch to done) | cycles |
+|---|---|
+| operands staged by a thread copy loop (`make sim-mma`) | 3374 |
+| operands staged by TMA (`make sim-tma`) | 1408 |
+
+The tensor core was busy 93 cycles; 25 of them overlapped with a copy.
 
 ---
 

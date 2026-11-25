@@ -15,8 +15,9 @@
 //            the 16-bit halfword at byte addr[1]
 // Both are 1-cycle BRAMs, so the protocol is the same; only the port and the
 // returned width differ. `hold` stops new requests from being accepted (the
-// current one still completes): another unit (the tensor core) is borrowing
-// the shared-memory read port. `sh_busy` tells it when the port is free.
+// current one still completes): another unit is borrowing a read port (the
+// tensor core the shared one, the copy engine the main one). `sh_busy` /
+// `mem_busy` tell it when its port is free.
 //
 // Per request: drive raddr -> wait 1 cycle (BRAM latency) -> 1-cycle ready pulse.
 module lsu_arbiter #(
@@ -33,6 +34,7 @@ module lsu_arbiter #(
 
     input  wire                 hold,                    // accept no new request
     output wire                 sh_busy,                 // a shared read is in flight
+    output wire                 mem_busy,                // a main-memory read is in flight
 
     // ---- main memory read port ----
     output reg  [ADDR_BITS-1:0] mem_raddr,
@@ -58,7 +60,8 @@ module lsu_arbiter #(
     reg             svc_space;   // ... and which memory it reads
     reg             svc_hi;      // shared: upper halfword of the word
 
-    assign sh_busy = (state != S_IDLE) && svc_space;
+    assign sh_busy  = (state != S_IDLE) && svc_space;
+    assign mem_busy = (state != S_IDLE) && !svc_space;
 
     // Lowest set request bit (iterate high->low so the lowest index wins).
     integer k;

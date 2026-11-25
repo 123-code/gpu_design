@@ -86,6 +86,8 @@ module core #(
     wire decoded_bar;      // BAR
     wire decoded_mma, decoded_tcfg, decoded_tld, decoded_tldq, decoded_tc_op;
     wire tc_busy;
+    wire decoded_tma, decoded_tmawait;
+    wire tma_busy;
     wire [1:0] decoded_mac_byte; // which 8-bit slice of the 32-bit MAC/FC result
     
     wire current_warp;
@@ -141,6 +143,8 @@ module core #(
         .decoded_tld(decoded_tld),
         .decoded_tldq(decoded_tldq),
         .decoded_tc_op(decoded_tc_op),
+        .decoded_tma(decoded_tma),
+        .decoded_tmawait(decoded_tmawait),
         .decoded_mac_byte(decoded_mac_byte)
     );
 
@@ -162,6 +166,8 @@ module core #(
         .decoded_bar(decoded_bar),
         .decoded_tc_op(decoded_tc_op),
         .tc_busy(tc_busy),
+        .decoded_tma_op(decoded_tma || decoded_tmawait),
+        .tma_busy(tma_busy),
         .decoded_pc_mux(decoded_pc_mux),
         .decoded_immediate(decoded_immediate[7:0]), // branch target is PC-domain (8-bit)
         .branch_votes(branch_votes),
@@ -292,6 +298,29 @@ module core #(
     wire [7:0]  sh_waddr;
     wire [31:0] sh_wdata;
     wire [3:0]  sh_wbe;
+    wire        arb_sh_we;              // LSU write arbiter's shared port
+    wire [7:0]  arb_sh_waddr;
+    wire [31:0] arb_sh_wdata;
+    wire [3:0]  arb_sh_wbe;
+    wire        eng_sh_we;              // copy engine's
+    wire [7:0]  eng_sh_waddr;
+    wire [31:0] eng_sh_wdata;
+    wire [3:0]  eng_sh_wbe;
+    wire        eng_wr_req;             // engine owns the write port while active
+    // The engine's first write comes >= 2 cycles after it raised eng_wr_req
+    // (which holds the write arbiter), so the two never write together.
+    assign sh_we    = eng_sh_we | arb_sh_we;
+    assign sh_waddr = eng_sh_we ? eng_sh_waddr : arb_sh_waddr;
+    assign sh_wdata = eng_sh_we ? eng_sh_wdata : arb_sh_wdata;
+    assign sh_wbe   = eng_sh_we ? eng_sh_wbe   : arb_sh_wbe;
+
+    // main-memory read port: copy engine or LSU read arbiter
+    wire [ADDR_BITS-1:0] arb_mem_raddr;
+    wire                 arb_mem_busy;
+    wire                 eng_rd_req, eng_rd_gnt;
+    wire [ADDR_BITS-1:0] eng_rd_addr;
+    assign eng_rd_gnt = eng_rd_req && !arb_mem_busy;
+    assign mem_raddr  = eng_rd_gnt ? eng_rd_addr : arb_mem_raddr;
     wire [7:0]  sh_raddr;
     wire [31:0] sh_rdata;
     wire [7:0]  arb_sh_raddr;
@@ -320,14 +349,14 @@ module core #(
         .waddr(waddr_flat),
         .wdata(wdata_flat),
         .space(wspace_flat),
-        .hold(1'b0),
+        .hold(eng_wr_req),
         .mem_we(mem_we),
         .mem_waddr(mem_waddr),
         .mem_wdata(mem_wdata),
-        .sh_we(sh_we),
-        .sh_waddr(sh_waddr),
-        .sh_wdata(sh_wdata),
-        .sh_wbe(sh_wbe),
+        .sh_we(arb_sh_we),
+        .sh_waddr(arb_sh_waddr),
+        .sh_wdata(arb_sh_wdata),
+        .sh_wbe(arb_sh_wbe),
         .wgrant(wgrant_flat)
     );
 
@@ -341,9 +370,10 @@ module core #(
         .req(lsu_req),
         .addr(lsu_addr),
         .space(lsu_space),
-        .hold(sh_rd_hold),
+        .hold(sh_rd_hold || eng_rd_req),
         .sh_busy(arb_sh_busy),
-        .mem_raddr(mem_raddr),
+        .mem_busy(arb_mem_busy),
+        .mem_raddr(arb_mem_raddr),
         .mem_rdata(mem_rdata),
         .sh_raddr(arb_sh_raddr),
         .sh_rdata(sh_rdata),
@@ -486,6 +516,30 @@ module core #(
         .tld_col(decoded_immediate[5:2]),
         .tld_data(tld_data),
         .qshift(tc_qshift)
+    );
+
+    // ==========================================
+    // BULK COPY ENGINE (TMA)
+    // ==========================================
+    // TMA Rs,Rt,#n: n words (imm[5:3], 0 = 8) from data memory [Rs] to shared
+    // memory [Rt], in the background. Addresses come from thread 0 (uniform).
+    copy_engine #(.ADDR_BITS(ADDR_BITS)) u_tma (
+        .clk(clk),
+        .reset(reset),
+        .start(decoded_tma && core_state == UPDATE_STATE),
+        .src(rs_bus[current_warp][0][ADDR_BITS-1:0]),
+        .dst(rt_bus[current_warp][0][9:0]),
+        .nwords((decoded_immediate[5:3] == 3'd0) ? 4'd8 : {1'b0, decoded_immediate[5:3]}),
+        .busy(tma_busy),
+        .rd_req(eng_rd_req),
+        .rd_gnt(eng_rd_gnt),
+        .rd_addr(eng_rd_addr),
+        .rd_data(mem_rdata),
+        .wr_req(eng_wr_req),
+        .sh_we(eng_sh_we),
+        .sh_waddr(eng_sh_waddr),
+        .sh_wdata(eng_sh_wdata),
+        .sh_wbe(eng_sh_wbe)
     );
 
     // Per-lane TLD/TLDQ value: lane i reads TMEM row i (rows 0..3; lanes

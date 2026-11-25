@@ -82,7 +82,11 @@ module decoder #(
     output reg decoded_tcfg,       // TCFG Rs
     output reg decoded_tld,        // TLD Rd,#col,#half : rd <- TMEM row half
     output reg decoded_tldq,       // TLDQ Rd,#col      : rd <- requantized row
-    output reg decoded_tc_op       // any of the above: needs the tensor core idle
+    output reg decoded_tc_op,      // any of the above: needs the tensor core idle
+
+    // Bulk copy engine (copy_engine.sv)
+    output reg decoded_tma,        // TMA Rs,Rt,#n : ADDB with instruction[10]
+    output reg decoded_tmawait     // TMAWAIT      : RET with bit 2 (0xF004)
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -154,6 +158,8 @@ module decoder #(
             decoded_tld <= 0;
             decoded_tldq <= 0;
             decoded_tc_op <= 0;
+            decoded_tma <= 0;
+            decoded_tmawait <= 0;
 
         end else begin
             // Only decode in the DECODE stage (4-bit state = 0011)
@@ -204,6 +210,8 @@ module decoder #(
                 decoded_tld <= 0;
                 decoded_tldq <= 0;
                 decoded_tc_op <= 0;
+                decoded_tma <= 0;
+                decoded_tmawait <= 0;
 
                 // --- THE OPCODE SWITCH ---
                 // Look at the top 4 wires of the instruction (bits 15, 14, 13, 12)
@@ -333,8 +341,12 @@ module decoder #(
                         // Advance a data-memory base pointer by the immediate.
                         // instruction[11] picks which: 0 = read base (ADDB),
                         // 1 = write base (WBASE).
-                        if (instruction[11]) decoded_wbase_add <= 1;
-                        else                 decoded_base_add  <= 1;
+                        // instruction[10] = 1 instead makes it TMA: copy
+                        // imm[5:3] words (0 = 8) from data memory at [rs] to
+                        // shared memory at [rt], asynchronously.
+                        if (instruction[10])      decoded_tma       <= 1;
+                        else if (instruction[11]) decoded_wbase_add <= 1;
+                        else                      decoded_base_add  <= 1;
                     end
                     STR: begin
                         // Store/emit: the LSU writes rt to the address in rs
@@ -349,6 +361,8 @@ module decoder #(
                             decoded_sync <= 1;
                         end else if (instruction[1] == 1'b1) begin
                             decoded_bar <= 1;             // BAR (0xF002)
+                        end else if (instruction[2] == 1'b1) begin
+                            decoded_tmawait <= 1;         // TMAWAIT (0xF004)
                         end else begin
                             decoded_ret <= 1;                     
                         end

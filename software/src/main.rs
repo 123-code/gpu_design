@@ -164,6 +164,12 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         // WBASE: advance the write base. ADDB opcode with instruction[11] set
         // (rd field = 0b100) so the decoder routes it to wbase, no new opcode.
         "WBASE" => vec![w(0b1001, 0b100, 0, imm(&toks[1]))],
+        // TMA Rsrc, Rdst, #n : asynchronously copy n words (1..8) from data
+        // memory at byte address Rsrc to shared memory at Rdst. ADDB opcode,
+        // rd field 0b010 (instruction[10]), imm[5:3] = n (8 encodes as 0),
+        // rt = Rdst.
+        "TMA" => vec![w(0b1001, 0b010, reg(&toks[1]),
+                        ((imm(&toks[3]) & 7) << 3) | (reg(&toks[2]) & 7))],
         // STR Rdata,[Raddr]  ->  addr in [8:6], data in [2:0]
         "STR" => vec![w(0b1011, 0, reg(&toks[2]), reg(&toks[1]) & 7)],
         // STS Rt,[Rs] : shared halfword at byte address Rs = Rt. STR with the
@@ -177,6 +183,8 @@ fn encode(toks: &[String], pc: u16, labels: &HashMap<String, u16>) -> Vec<u16> {
         // BAR: block-wide barrier. Every warp of the block parks here until
         // all live warps have arrived (CUDA __syncthreads). RET with bit 1.
         "BAR" => vec![0xF002],
+        // TMAWAIT: park until every TMA this core issued has landed.
+        "TMAWAIT" => vec![0xF004],
 
         // ---- FC-MAC + argmax coprocessor (opcode 0000, sub-fn in [5:4]) ----
         "FRST" => vec![0x0000],                                   // [5:4]=00 reset engine

@@ -8,6 +8,8 @@
 // result regions byte for byte.
 //
 //     +prefix=software/build/mma_s8   (files: .hex .data.hex .expect.hex)
+//     +need_overlap   also require cycles where the copy engine and the
+//                     tensor core were busy at once (the --tma kernels)
 module tb;
     localparam BIT_CYCLES = 16;
     localparam RESULT_BASE = 256;
@@ -30,6 +32,15 @@ module tb;
     reg [8*256-1:0] prefix;
     integer i, c, fails, ndata;
     reg [7:0] got;
+
+    // Cycles in which core 0's copy engine streamed data while its tensor
+    // core computed: the async overlap TMA exists for.
+    integer overlap = 0, tc_cycles = 0, kcycles = 0;
+    always @(posedge clk) begin
+        if (dut.gpu_enable && !dut.done) kcycles = kcycles + 1;   // kernel run time
+        if (dut.uut.compute_core_0.tc_busy) tc_cycles = tc_cycles + 1;
+        if (dut.uut.compute_core_0.tc_busy && dut.uut.compute_core_0.tma_busy) overlap = overlap + 1;
+    end
 
     initial begin
         if (!$value$plusargs("prefix=%s", prefix)) prefix = "software/build/mma_s8";
@@ -61,6 +72,12 @@ module tb;
                 end
             end
 
+        $display("kernel %0d cycles; tensor core busy %0d, %0d of them overlapped with a TMA copy",
+                 kcycles, tc_cycles, overlap);
+        if ($test$plusargs("need_overlap") && overlap == 0) begin
+            fails = fails + 1;
+            $display("  no TMA/MMA overlap");
+        end
         if (fails == 0)
             $display("RESULT: PASS - %0s: 3 MMAs + TLD/TLDQ match the reference on both cores", prefix);
         else
