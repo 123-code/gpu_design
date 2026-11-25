@@ -6,12 +6,12 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: regress regress-full sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full sim-subset sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Regression: every self-checking testbench that runs in a few seconds.
 # regress-full adds the minute-scale end-to-end sims and a short fuzz.
 REGRESS = sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp \
-          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link
+          sim-nn sim-mnist-jpp sim-jpp-features sim-grid sim-smem sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link sim-subset
 REGRESS_FULL = $(REGRESS) sim-mlp2 sim-mnist-jpp-full sim-raycast sim-hdmi
 regress:        ## Run the fast self-checking testbenches; stops at the first FAIL
 	@python3 test/regress.py $(REGRESS)
@@ -278,3 +278,14 @@ sim-link:       ## Two boards joined by the board link: an all-reduce of two vec
 	cd software && cargo run --quiet -- link_phase2.asm link_phase2.hex > /dev/null
 	$(IVERILOG) -g2012 -s tb -o sim_link test/tb_link.sv test/sdram_model.sv src/*.sv
 	$(VVP) sim_link
+
+sim-subset:     ## Feature switches off (no tensor core, TMA, global memory, link): the core kernels still run
+	@for t in loadrun grid smem cpi; do \
+	  case $$t in cpi) (cd software && cargo run --quiet -- cpi_kernel.asm cpi_kernel.hex > /dev/null);; \
+	              grid) (cd software && cargo run --quiet -- grid_kernel.asm grid_kernel.hex > /dev/null);; \
+	              smem) (cd software && cargo run --quiet -- smem_kernel.asm smem_kernel.hex > /dev/null && \
+	                     cargo run --quiet -- smem_nobar_kernel.asm smem_nobar_kernel.hex > /dev/null);; \
+	              loadrun) (cd software && cargo run --quiet -- sum_kernel.asm sum_kernel.hex > /dev/null);; esac; \
+	  $(IVERILOG) -g2012 -s tb -s cfg -o sim_subset test/tb_$$t.sv test/cfg_subset.v src/*.sv && \
+	  $(VVP) sim_subset | grep RESULT; \
+	done

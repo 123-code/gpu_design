@@ -42,7 +42,15 @@ module top #(
     parameter HOST_CPU = 0,
     parameter FIRMWARE = "software/build/fw.hex",
     // Board link (board_link.sv): system clocks per link bit
-    parameter LINK_DIV = 4
+    parameter LINK_DIV = 4,
+    // Feature switches for a board build (docs/blackwell.md "Board fit").
+    // GMEM_ENABLE=0 drops the SDRAM controller, its arbiter, the cores' L1s
+    // and the link (the host CPU needs global memory too).
+    parameter TC_ENABLE   = 1,
+    parameter TC_KINDS    = 4'b1111,
+    parameter TMA_ENABLE  = 1,
+    parameter GMEM_ENABLE = 1,
+    parameter LINK_ENABLE = 1
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
@@ -193,7 +201,9 @@ module top #(
     reg        emit_ready;//ready to send out data
 //ports open to the gpu, ehich contsins dispatecer, program memory,compute cores
     gpu #(.BLOCK_DIM(BLOCK_DIM), .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
-          .WARPS_PER_CORE(WARPS_PER_CORE)) uut (
+          .WARPS_PER_CORE(WARPS_PER_CORE),
+          .TC_ENABLE(TC_ENABLE), .TC_KINDS(TC_KINDS), .TMA_ENABLE(TMA_ENABLE),
+          .GMEM_ENABLE(GMEM_ENABLE)) uut (
         .clk(sys_clk),
         .reset(gpu_reset),
         .enable(gpu_enable),
@@ -258,8 +268,10 @@ module top #(
     wire [1:0]  lk_req, lk_ack;
     wire [15:0] lk_addr [1:0];
     wire [15:0] lk_data [1:0];
+    wire [15:0] lk_link_sent, lk_link_received;
     genvar gl;
-    generate for (gl = 0; gl < 2; gl = gl + 1) begin : routers
+    generate if (LINK_ENABLE && GMEM_ENABLE) begin : linkg
+    for (gl = 0; gl < 2; gl = gl + 1) begin : routers
         link_router u_rt (
             .clk(sys_clk), .reset(sys_reset),
             .c_req(cg_req[gl]), .c_we(g_we_c[gl]), .c_addr(g_addr_c[gl]),
@@ -269,13 +281,12 @@ module top #(
             .a_rdata(sd_rdata),
             .l_req(lk_req[gl]), .l_addr(lk_addr[gl]), .l_data(lk_data[gl]), .l_ack(lk_ack[gl])
         );
-    end endgenerate
+    end
     // one link, two cores: core 0 first
     wire        lk_s_ack;
     wire        lk_pick1 = !lk_req[0];
     assign lk_ack[0] = lk_s_ack && !lk_pick1;
     assign lk_ack[1] = lk_s_ack &&  lk_pick1;
-    wire [15:0] lk_link_sent, lk_link_received;
     board_link #(.DIV(LINK_DIV)) u_link (
         .clk(sys_clk), .reset(sys_reset),
         .s_req(lk_req[0] || lk_req[1]),
@@ -288,9 +299,24 @@ module top #(
         .sent(lk_link_sent), .received(lk_link_received)
     );
     assign g_we_c[4] = 1'b1;
+    end else begin : nolink
+        // no link: the cores' global ports go straight to the SDRAM arbiter
+        for (gl = 0; gl < 2; gl = gl + 1) begin : passthru
+            assign g_req[gl]     = cg_req[gl];
+            assign cg_ack[gl]    = g_ack[gl];
+            assign cg_rvalid[gl] = g_rvalid[gl];
+            assign cg_done[gl]   = g_done[gl];
+            assign cg_rdata[gl]  = sd_rdata;
+        end
+        assign link_tx = 1'b1; assign link_idle = 1'b1;
+        assign g_req[4] = 1'b0; assign g_we_c[4] = 1'b1; assign g_addr_c[4] = 21'd0;
+        assign g_wdata_c[4] = 32'd0; assign g_wbe_c[4] = 4'd0;
+        assign lk_link_sent = 16'd0; assign lk_link_received = 16'd0;
+    end endgenerate
     // A run is done once the GPU is and every remote store has left the board
     assign done = gpu_done_raw && link_idle;
 
+    generate if (GMEM_ENABLE) begin : gmemg
     mem_arb #(.N(5)) u_garb (
         .clk(sys_clk), .reset(sys_reset),
         .c_req(g_req), .c_we(g_we_c),
@@ -311,6 +337,17 @@ module top #(
         .sdram_cas_n(O_sdram_cas_n), .sdram_we_n(O_sdram_wen_n), .sdram_ba(O_sdram_ba),
         .sdram_addr(O_sdram_addr), .sdram_dqm(O_sdram_dqm), .sdram_dq(IO_sdram_dq)
     );
+    end else begin : nogmem
+        assign g_ack = 5'd0; assign g_rvalid = 5'd0; assign g_done = 5'd0;
+        assign sd_rdata = 32'd0; assign sd_init_done = 1'b0;
+        assign sd_req = 1'b0; assign sd_we = 1'b0; assign sd_addr = 21'd0;
+        assign sd_wdata = 32'd0; assign sd_wbe = 4'd0;
+        assign sd_ack = 1'b0; assign sd_rvalid = 1'b0; assign sd_done = 1'b0;
+        // SDRAM pins idle (deselected)
+        assign O_sdram_cke = 1'b0; assign O_sdram_cs_n = 1'b1; assign O_sdram_ras_n = 1'b1;
+        assign O_sdram_cas_n = 1'b1; assign O_sdram_wen_n = 1'b1; assign O_sdram_ba = 2'd0;
+        assign O_sdram_addr = 11'd0; assign O_sdram_dqm = 4'hf; assign IO_sdram_dq = 32'bz;
+    end endgenerate
     // SDRAM clocked 180 degrees from the controller: commands launched on a
     // sys_clk edge are sampled mid-cycle, read data is sampled a half cycle
     // after the chip drives it.

@@ -82,3 +82,4 @@ sim_drain
 sim_host
 sim_link
 .ystmp/
+sim_subset

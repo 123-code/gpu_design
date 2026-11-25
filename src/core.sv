@@ -6,7 +6,14 @@ module core #(
     parameter WARPS_PER_CORE = 2,    // Stage 2: Multiple warps for latency hiding
     parameter BLOCK_DIM = THREADS_PER_BLOCK, // launch size: how many threads this block runs
     parameter ADDR_BITS = 13,        // width of data memory address
-    parameter DATA_BITS = 16         // register/ALU datapath width (memory stays byte-wide)
+    parameter DATA_BITS = 16,        // register/ALU datapath width (memory stays byte-wide)
+    // Feature switches, so a board build can leave units out (docs/blackwell.md
+    // "Board fit"). Disabled units are not instantiated; their instructions
+    // complete without effect (loads from a missing global memory read 0).
+    parameter TC_ENABLE   = 1,       // tensor core + TMEM
+    parameter TC_KINDS    = 4'b1111, // MMA kinds built: bit k = kind k (s8, e4m3, e2m1, mxf4)
+    parameter TMA_ENABLE  = 1,       // bulk copy engine
+    parameter GMEM_ENABLE = 1        // L1 + global-memory port
 ) (
     input wire clk,//clock
     input wire reset,//reset signal
@@ -366,14 +373,23 @@ module core #(
     wire [3:0]  l1m_wbe;
     wire [15:0] l1_hits, l1_misses;
     wire        l1_idle;
-    l1_cache u_l1 (
-        .clk(clk), .reset(reset),
-        .rd_req(l1_rd_req), .rd_addr(l1_rd_addr), .rd_ack(l1_rd_ack), .rd_data(l1_rd_data),
-        .wr_req(l1_wr_req), .wr_addr(l1_wr_addr), .wr_data(l1_wr_data), .wr_ack(l1_wr_ack),
-        .m_req(l1m_req), .m_we(l1m_we), .m_addr(l1m_addr), .m_wdata(l1m_wdata), .m_wbe(l1m_wbe),
-        .m_ack(l1m_ack), .m_rvalid(l1m_rvalid), .m_rdata(g_rdata), .m_done(l1m_done),
-        .hits(l1_hits), .misses(l1_misses), .idle(l1_idle)
-    );
+    generate if (GMEM_ENABLE) begin : l1g
+        l1_cache u_l1 (
+            .clk(clk), .reset(reset),
+            .rd_req(l1_rd_req), .rd_addr(l1_rd_addr), .rd_ack(l1_rd_ack), .rd_data(l1_rd_data),
+            .wr_req(l1_wr_req), .wr_addr(l1_wr_addr), .wr_data(l1_wr_data), .wr_ack(l1_wr_ack),
+            .m_req(l1m_req), .m_we(l1m_we), .m_addr(l1m_addr), .m_wdata(l1m_wdata), .m_wbe(l1m_wbe),
+            .m_ack(l1m_ack), .m_rvalid(l1m_rvalid), .m_rdata(g_rdata), .m_done(l1m_done),
+            .hits(l1_hits), .misses(l1_misses), .idle(l1_idle)
+        );
+    end else begin : nol1
+        // no global memory: loads read 0, stores vanish, nothing in flight
+        assign l1_rd_ack = l1_rd_req;  assign l1_rd_data = 16'd0;
+        assign l1_wr_ack = l1_wr_req;
+        assign l1m_req = 1'b0; assign l1m_we = 1'b0; assign l1m_addr = 21'd0;
+        assign l1m_wdata = 32'd0; assign l1m_wbe = 4'd0;
+        assign l1_hits = 16'd0; assign l1_misses = 16'd0; assign l1_idle = 1'b1;
+    end endgenerate
 
     // The block is done when every warp has retired AND nothing it started
     // is still in flight: a posted store in the L1 write buffer, a TMA copy,
@@ -389,20 +405,28 @@ module core #(
     assign gp_addr[0] = l1m_addr;   assign gp_addr[1] = engm_addr;
     assign gp_wdata[0] = l1m_wdata; assign gp_wdata[1] = 32'd0;
     assign gp_wbe[0] = l1m_wbe;     assign gp_wbe[1] = 4'd0;
-    mem_arb #(.N(2)) u_gport (
-        .clk(clk), .reset(reset),
-        .c_req({engm_req, l1m_req}),
-        .c_we({1'b0, l1m_we}),
-        .c_addr_p({gp_addr[1], gp_addr[0]}),
-        .c_wdata_p({gp_wdata[1], gp_wdata[0]}),
-        .c_wbe_p({gp_wbe[1], gp_wbe[0]}),
-        .c_ack(gp_ack), .c_rvalid(gp_rvalid), .c_done(gp_done),
-        .m_req(g_req), .m_we(g_we), .m_addr(g_addr), .m_wdata(g_wdata), .m_wbe(g_wbe),
-        .m_ack(g_ack), .m_rvalid(g_rvalid), .m_done(g_done)
-    );
-    assign {engm_ack, l1m_ack}       = gp_ack;
-    assign {engm_rvalid, l1m_rvalid} = gp_rvalid;
-    assign {engm_done, l1m_done}     = gp_done;
+    generate if (GMEM_ENABLE) begin : gportg
+        mem_arb #(.N(2)) u_gport (
+            .clk(clk), .reset(reset),
+            .c_req({engm_req, l1m_req}),
+            .c_we({1'b0, l1m_we}),
+            .c_addr_p({gp_addr[1], gp_addr[0]}),
+            .c_wdata_p({gp_wdata[1], gp_wdata[0]}),
+            .c_wbe_p({gp_wbe[1], gp_wbe[0]}),
+            .c_ack(gp_ack), .c_rvalid(gp_rvalid), .c_done(gp_done),
+            .m_req(g_req), .m_we(g_we), .m_addr(g_addr), .m_wdata(g_wdata), .m_wbe(g_wbe),
+            .m_ack(g_ack), .m_rvalid(g_rvalid), .m_done(g_done)
+        );
+        assign {engm_ack, l1m_ack}       = gp_ack;
+        assign {engm_rvalid, l1m_rvalid} = gp_rvalid;
+        assign {engm_done, l1m_done}     = gp_done;
+    end else begin : nogport
+        assign g_req = 1'b0; assign g_we = 1'b0; assign g_addr = 21'd0;
+        assign g_wdata = 32'd0; assign g_wbe = 4'd0;
+        assign l1m_ack = 1'b0; assign l1m_rvalid = 1'b0; assign l1m_done = 1'b0;
+        // a TMAG with no global memory lands zeros and finishes
+        assign engm_ack = engm_req; assign engm_rvalid = engm_req; assign engm_done = engm_req;
+    end endgenerate
     wire [WARPS_PER_CORE*THREADS_PER_BLOCK-1:0] wgrant_flat;
 
     // ==========================================
@@ -666,63 +690,76 @@ module core #(
     // The unit borrows the shared-memory read port while it stages A and B.
     wire [127:0] tld_data;
     wire [4:0]   tc_qshift;
-    tensor_core #(.TMEM_COLS(16)) u_tc (
-        .clk(clk),
-        .reset(reset),
-        .start(decoded_mma && core_state == UPDATE_STATE),
-        .a_addr(rs_bus[current_warp][0][9:0]),
-        .b_addr(rt_bus[current_warp][0][9:0]),
-        .d_tile(decoded_immediate[4:3]),
-        .accumulate(decoded_immediate[5]),
-        .pair(decoded_mma2 && cluster_mode),
-        .rank(block_id[0]),
-        .cfg_we(decoded_tcfg && core_state == UPDATE_STATE),
-        .cfg_data(rs_bus[current_warp][0]),
-        .busy(tc_busy),
-        .sh_req(sh_rd_hold),
-        .sh_gnt(sh_rd_gnt),
-        .sh_raddr(unit_sh_raddr),
-        .sh_rdata(sh_rdata),
-        .pr_req(tc_pr_req),
-        .pr_addr(tc_pr_addr),
-        .pr_ack(tc_pr_ack),
-        .pr_data(pr_data),
-        .tld_col(decoded_immediate[5:2]),
-        .tld_data(tld_data),
-        .qshift(tc_qshift)
-    );
+    generate if (TC_ENABLE) begin : tcg
+        tensor_core #(.TMEM_COLS(16), .KINDS(TC_KINDS)) u_tc (
+            .clk(clk),
+            .reset(reset),
+            .start(decoded_mma && core_state == UPDATE_STATE),
+            .a_addr(rs_bus[current_warp][0][9:0]),
+            .b_addr(rt_bus[current_warp][0][9:0]),
+            .d_tile(decoded_immediate[4:3]),
+            .accumulate(decoded_immediate[5]),
+            .pair(decoded_mma2 && cluster_mode),
+            .rank(block_id[0]),
+            .cfg_we(decoded_tcfg && core_state == UPDATE_STATE),
+            .cfg_data(rs_bus[current_warp][0]),
+            .busy(tc_busy),
+            .sh_req(sh_rd_hold),
+            .sh_gnt(sh_rd_gnt),
+            .sh_raddr(unit_sh_raddr),
+            .sh_rdata(sh_rdata),
+            .pr_req(tc_pr_req),
+            .pr_addr(tc_pr_addr),
+            .pr_ack(tc_pr_ack),
+            .pr_data(pr_data),
+            .tld_col(decoded_immediate[5:2]),
+            .tld_data(tld_data),
+            .qshift(tc_qshift)
+        );
+    end else begin : notc
+        assign tc_busy = 1'b0; assign sh_rd_hold = 1'b0; assign unit_sh_raddr = 8'd0;
+        assign tc_pr_req = 1'b0; assign tc_pr_addr = 8'd0;
+        assign tld_data = 128'd0; assign tc_qshift = 5'd0;
+    end endgenerate
 
     // ==========================================
     // BULK COPY ENGINE (TMA)
     // ==========================================
     // TMA Rs,Rt,#n: n words (imm[5:3], 0 = 8) from data memory [Rs] to shared
     // memory [Rt], in the background. Addresses come from thread 0 (uniform).
-    copy_engine #(.ADDR_BITS(ADDR_BITS)) u_tma (
-        .clk(clk),
-        .reset(reset),
-        .start(decoded_tma && core_state == UPDATE_STATE),
-        .src(rs_bus[current_warp][0][ADDR_BITS-1:0]),
-        .dst(rt_bus[current_warp][0][9:0]),
-        .nwords((decoded_immediate[5:3] == 3'd0) ? 4'd8 : {1'b0, decoded_immediate[5:3]}),
-        .src_global(decoded_tma_global),
-        .gsrc(rs_bus[current_warp][0]),
-        .busy(tma_busy),
-        .m_req(engm_req),
-        .m_addr(engm_addr),
-        .m_ack(engm_ack),
-        .m_rvalid(engm_rvalid),
-        .m_rdata(g_rdata),
-        .m_done(engm_done),
-        .rd_req(eng_rd_req),
-        .rd_gnt(eng_rd_gnt),
-        .rd_addr(eng_rd_addr),
-        .rd_data(mem_rdata),
-        .wr_req(eng_wr_req),
-        .sh_we(eng_sh_we),
-        .sh_waddr(eng_sh_waddr),
-        .sh_wdata(eng_sh_wdata),
-        .sh_wbe(eng_sh_wbe)
-    );
+    generate if (TMA_ENABLE) begin : tmag
+        copy_engine #(.ADDR_BITS(ADDR_BITS)) u_tma (
+            .clk(clk),
+            .reset(reset),
+            .start(decoded_tma && core_state == UPDATE_STATE),
+            .src(rs_bus[current_warp][0][ADDR_BITS-1:0]),
+            .dst(rt_bus[current_warp][0][9:0]),
+            .nwords((decoded_immediate[5:3] == 3'd0) ? 4'd8 : {1'b0, decoded_immediate[5:3]}),
+            .src_global(decoded_tma_global),
+            .gsrc(rs_bus[current_warp][0]),
+            .busy(tma_busy),
+            .m_req(engm_req),
+            .m_addr(engm_addr),
+            .m_ack(engm_ack),
+            .m_rvalid(engm_rvalid),
+            .m_rdata(g_rdata),
+            .m_done(engm_done),
+            .rd_req(eng_rd_req),
+            .rd_gnt(eng_rd_gnt),
+            .rd_addr(eng_rd_addr),
+            .rd_data(mem_rdata),
+            .wr_req(eng_wr_req),
+            .sh_we(eng_sh_we),
+            .sh_waddr(eng_sh_waddr),
+            .sh_wdata(eng_sh_wdata),
+            .sh_wbe(eng_sh_wbe)
+        );
+    end else begin : notma
+        assign tma_busy = 1'b0; assign engm_req = 1'b0; assign engm_addr = 21'd0;
+        assign eng_rd_req = 1'b0; assign eng_rd_addr = '0; assign eng_wr_req = 1'b0;
+        assign eng_sh_we = 1'b0; assign eng_sh_waddr = 8'd0; assign eng_sh_wdata = 32'd0;
+        assign eng_sh_wbe = 4'd0;
+    end endgenerate
 
     // Per-lane TLD/TLDQ value: lane i reads TMEM row i (rows 0..3; lanes
     // past the tile read 0).

@@ -54,7 +54,8 @@
 // ~30 cycles for 64 int8/fp8 MACs or 128 fp4 MACs.
 // ============================================================================
 module tensor_core #(
-    parameter TMEM_COLS = 16
+    parameter TMEM_COLS = 16,
+    parameter KINDS     = 4'b1111      // kinds built (bit k = kind k); others compute 0
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -230,10 +231,10 @@ module tensor_core #(
     reg signed [31:0] dot;
     always @(*) begin
         case (kind)
-            3'd1:    dot = dot_fp8 >>> 10;           // 2^-18 units -> Q.8, floor
-            3'd2:    dot = {{16{dot_fp4[15]}}, dot_fp4} <<< 6;  // 2^-2 -> Q.8, exact
-            3'd3:    dot = mx_val[31:0];
-            default: dot = dot_s8;
+            3'd1:    dot = KINDS[1] ? (dot_fp8 >>> 10) : 32'sd0;            // 2^-18 -> Q.8, floor
+            3'd2:    dot = KINDS[2] ? ({{16{dot_fp4[15]}}, dot_fp4} <<< 6) : 32'sd0;  // 2^-2 -> Q.8
+            3'd3:    dot = KINDS[3] ? mx_val[31:0] : 32'sd0;
+            default: dot = KINDS[0] ? dot_s8 : 32'sd0;
         endcase
     end
 

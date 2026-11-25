@@ -12,7 +12,12 @@ module gpu #(
     // Warps per core. >1 hides memory latency but DUPLICATES each thread's register
     // file / LSU / PC (ALUs are shared), so it costs ~2x LUT for the same compute.
     // Set to 1 to spend that LUT on wider SIMD (more ALUs) instead.
-    parameter WARPS_PER_CORE = 2
+    parameter WARPS_PER_CORE = 2,
+    // feature switches (see core.sv)
+    parameter TC_ENABLE   = 1,
+    parameter TC_KINDS    = 4'b1111,
+    parameter TMA_ENABLE  = 1,
+    parameter GMEM_ENABLE = 1
 ) (
     input wire clk,//clock input
     input wire reset,//reset signal, clears internal states to 0
@@ -165,7 +170,9 @@ module gpu #(
     core #(
         .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
         .WARPS_PER_CORE(WARPS_PER_CORE),
-        .BLOCK_DIM(BLOCK_DIM)
+        .BLOCK_DIM(BLOCK_DIM),
+        .TC_ENABLE(TC_ENABLE), .TC_KINDS(TC_KINDS),
+        .TMA_ENABLE(TMA_ENABLE), .GMEM_ENABLE(GMEM_ENABLE)
     ) compute_core_0 (
         .clk(clk),
         .reset(reset || core_0_blk_reset),
@@ -210,7 +217,9 @@ module gpu #(
     core #(
         .THREADS_PER_BLOCK(THREADS_PER_BLOCK),
         .WARPS_PER_CORE(WARPS_PER_CORE),
-        .BLOCK_DIM(BLOCK_DIM)
+        .BLOCK_DIM(BLOCK_DIM),
+        .TC_ENABLE(TC_ENABLE), .TC_KINDS(TC_KINDS),
+        .TMA_ENABLE(TMA_ENABLE), .GMEM_ENABLE(GMEM_ENABLE)
     ) compute_core_1 (
         .clk(clk),
         .reset(reset || core_1_blk_reset),
