@@ -37,7 +37,10 @@ module top #(
     // SDRAM: 200 us power-up wait at 54 MHz, refresh well inside 15.6 us.
     // Testbenches shrink the wait.
     parameter SDRAM_INIT_CYCLES = 10800,
-    parameter SDRAM_REF_CYCLES  = 750
+    parameter SDRAM_REF_CYCLES  = 750,
+    // On-chip host CPU (host_cpu.sv): 0 = none, the PC is the host (default)
+    parameter HOST_CPU = 0,
+    parameter FIRMWARE = "software/build/fw.hex"
 ) (
     input  wire       clk,          // 27 MHz crystal  (PIN 4)
     input  wire       uart_rx_in,    // from host       (PIN 70)
@@ -77,14 +80,26 @@ module top #(
     // ---- Host-to-Device pipeline ----
     wire [7:0]  grid_dim;             // blocks in the launch (frame header)
     wire        cluster;              // cluster launch (frame header)
+    // The run's launch config: from the frame header, or from the host CPU
+    // when it launched the run
+    reg         cpu_owns = 1'b0;
+    reg  [7:0]  cpu_grid = 8'd0;
+    reg         cpu_cluster = 1'b0;
+    wire [7:0]  run_grid    = cpu_owns ? cpu_grid    : grid_dim;
+    wire        run_cluster = cpu_owns ? cpu_cluster : cluster;
+    // host CPU -> GPU instruction memory and launch
+    wire        cpu_iwe;
+    wire [7:0]  cpu_iaddr;
+    wire [15:0] cpu_idata;
+    wire        cpu_launch;
     wire        dma_g_we;             // a payload byte for global memory
     wire [12:0] dma_g_addr;
     wire [7:0]  dma_g_data;
-    // global-memory clients: 0 = core 0, 1 = core 1, 2 = DMA (see below)
-    wire [2:0]  g_req, g_we_c, g_ack, g_rvalid, g_done;
-    wire [20:0] g_addr_c  [2:0];
-    wire [31:0] g_wdata_c [2:0];
-    wire [3:0]  g_wbe_c   [2:0];
+    // global-memory clients: 0 = core 0, 1 = core 1, 2 = DMA, 3 = host CPU
+    wire [3:0]  g_req, g_we_c, g_ack, g_rvalid, g_done;
+    wire [20:0] g_addr_c  [3:0];
+    wire [31:0] g_wdata_c [3:0];
+    wire [3:0]  g_wbe_c   [3:0];
     wire [31:0] sd_rdata;
     wire        gpu_start, loading; // gpu start is high when the image was loaded loading is high while image is still loading from dma
     wire        instr_we;
@@ -142,7 +157,7 @@ module top #(
     always @(posedge sys_clk) begin
         if (sys_reset)        begin armed <= 1'b0; runrst <= 5'd0; end
         //if gpu start, we set the armed register to 1 and the runrst counter to 0
-        else if (gpu_start)   begin armed <= 1'b1; runrst <= 5'd0; end // new run
+        else if (gpu_start || cpu_launch) begin armed <= 1'b1; runrst <= 5'd0; end // new run
         else if (armed && !(&runrst)) runrst <= runrst + 1'b1;
     end
     // Register the GPU reset. gpu_reset fans out to every flop in the design, so
@@ -167,17 +182,17 @@ module top #(
         .clk(sys_clk),
         .reset(gpu_reset),
         .enable(gpu_enable),
-        .grid_dim(grid_dim),
-        .cluster(cluster),
+        .grid_dim(run_grid),
+        .cluster(run_cluster),
         .result(result),
         .done(done),
         .debug_core_state(),
         .debug_instruction(),
         .operand_a(6'd0),             // operand-injection unused in host-driven mode
         .operand_b(6'd0),
-        .instr_we(instr_we),
-        .instr_waddr(instr_waddr),
-        .instr_wdata(instr_wdata),
+        .instr_we(instr_we || cpu_iwe),
+        .instr_waddr(cpu_iwe ? cpu_iaddr : instr_waddr),
+        .instr_wdata(cpu_iwe ? cpu_idata : instr_wdata),
         .mem_raddr(mem_raddr),
         .mem_rdata(mem_rdata),
         .mem_we(gpu_we),
@@ -223,7 +238,7 @@ module top #(
     assign g_wdata_c[2] = {4{dg_data}};
     assign g_wbe_c[2]   = 4'b0001 << dg_addr[1:0];
 
-    mem_arb #(.N(3)) u_garb (
+    mem_arb #(.N(4)) u_garb (
         .clk(sys_clk), .reset(sys_reset),
         .c_req(g_req), .c_we(g_we_c), .c_addr(g_addr_c), .c_wdata(g_wdata_c), .c_wbe(g_wbe_c),
         .c_ack(g_ack), .c_rvalid(g_rvalid), .c_done(g_done),
@@ -245,27 +260,136 @@ module top #(
     // after the chip drives it.
     assign O_sdram_clk = ~sys_clk;
 
+    // ---- on-chip host CPU (Grace, at this scale) ----
+    // Bus map:  0x1000_0000 + 4i  GPU instruction word i (write)
+    //           0x2000_0000 + a   global memory byte address a (SDRAM)
+    //           0x3000_0000       w: launch a grid (bits 7:0 gridDim, bit 8
+    //                                cluster); r: bit 0 = no run in flight
+    //           0x3000_0004       w: send a byte on the UART (blocks till sent)
+    wire        cpu_tx_req;           // CPU byte waiting for the UART
+    wire [7:0]  cpu_tx_byte;
+    reg         cpu_tx_done;          // UART finished the CPU's byte
+    reg         cpu_tx_take;          // UART took the CPU's byte
+    wire        cpu_halted;
+    reg         cpu_running = 1'b0;   // a CPU-launched run is in flight
+    reg         done_d = 1'b0;
+    generate if (HOST_CPU) begin : host
+        wire        b_req, b_we;
+        wire [31:0] b_addr, b_wdata;
+        wire [3:0]  b_wbe;
+        reg         b_ack;
+        reg  [31:0] b_rdata;
+        host_cpu #(.FIRMWARE(FIRMWARE)) u_cpu (
+            .clk(sys_clk), .reset(sys_reset),
+            .bus_req(b_req), .bus_we(b_we), .bus_addr(b_addr), .bus_wdata(b_wdata),
+            .bus_wbe(b_wbe), .bus_ack(b_ack), .bus_rdata(b_rdata), .halted(cpu_halted)
+        );
+        wire sel_imem = b_addr[31:28] == 4'h1;
+        wire sel_gmem = b_addr[31:28] == 4'h2;
+        wire sel_ctrl = b_addr[31:28] == 4'h3 && !b_addr[2];
+        wire sel_uart = b_addr[31:28] == 4'h3 &&  b_addr[2];
+        // The CPU holds b_req until it sees b_ack, then drops it for at least
+        // the next fetch, so each bus op starts with a rising edge.
+        reg  b_req_d, g_issued, tx_want;
+        wire first = b_req && !b_req_d;
+        assign cpu_iwe     = first && sel_imem && b_we;
+        assign cpu_iaddr   = b_addr[9:2];
+        assign cpu_idata   = b_wdata[15:0];
+        assign cpu_launch  = first && sel_ctrl && b_we;
+        assign cpu_tx_req  = tx_want;
+        assign cpu_tx_byte = b_wdata[7:0];
+        // global memory: client 3. Reads fetch the 4-word line and keep the
+        // word asked for; writes are one masked word.
+        assign g_req[3]     = b_req && sel_gmem && !g_issued;
+        assign g_we_c[3]    = b_we;
+        assign g_addr_c[3]  = b_we ? {1'b0, b_addr[21:2]} : {1'b0, b_addr[21:4], 2'b00};
+        assign g_wdata_c[3] = b_wdata;
+        assign g_wbe_c[3]   = b_wbe;
+        reg [1:0] beat;
+        always @(posedge sys_clk) begin
+            if (sys_reset) begin
+                b_ack <= 1'b0; b_req_d <= 1'b0; g_issued <= 1'b0; beat <= 2'd0; tx_want <= 1'b0;
+            end else begin
+                b_ack   <= 1'b0;
+                b_req_d <= b_req;
+                if (first && (sel_imem || sel_ctrl)) begin
+                    b_ack   <= 1'b1;                           // one-cycle targets
+                    b_rdata <= {31'd0, !cpu_running};
+                end
+                if (first && sel_uart && b_we) tx_want <= 1'b1;
+                if (cpu_tx_take) tx_want <= 1'b0;
+                if (cpu_tx_done) b_ack <= 1'b1;
+                if (g_ack[3]) g_issued <= 1'b1;
+                if (!b_req)   g_issued <= 1'b0;
+                if (g_rvalid[3]) begin
+                    if (beat == b_addr[3:2]) b_rdata <= sd_rdata;
+                    beat <= beat + 2'd1;
+                end
+                if (g_done[3]) begin b_ack <= 1'b1; beat <= 2'd0; end
+            end
+        end
+    end else begin : no_host
+        assign cpu_iwe = 1'b0; assign cpu_iaddr = 8'd0; assign cpu_idata = 16'd0;
+        assign cpu_launch = 1'b0; assign cpu_tx_req = 1'b0; assign cpu_tx_byte = 8'd0;
+        assign cpu_halted = 1'b0;
+        assign g_req[3] = 1'b0; assign g_we_c[3] = 1'b0; assign g_addr_c[3] = 21'd0;
+        assign g_wdata_c[3] = 32'd0; assign g_wbe_c[3] = 4'd0;
+    end endgenerate
+
+    // who launched the current run, and whether it is still in flight
+    always @(posedge sys_clk) begin
+        done_d <= done;
+        if (sys_reset) begin
+            cpu_owns <= 1'b0; cpu_running <= 1'b0;
+        end else if (cpu_launch) begin
+            cpu_owns <= 1'b1; cpu_running <= 1'b1;
+            cpu_grid <= host_launch_word[7:0]; cpu_cluster <= host_launch_word[8];
+        end else begin
+            if (gpu_start) cpu_owns <= 1'b0;                 // a UART frame took over
+            if (done && !done_d) cpu_running <= 1'b0;        // the run finished
+        end
+    end
+    wire [31:0] host_launch_word;
+    generate if (HOST_CPU) begin : hlw
+        assign host_launch_word = host.b_wdata;
+    end else begin : nhlw
+        assign host_launch_word = 32'd0;
+    end endgenerate
+
 //fsm,pulses tx_start once to start uart_txand waits while busy then pulses emit ready so gpu can send the next byte
     wire uart_busy;
     reg  tx_start;
     localparam E_IDLE = 2'd0, E_SEND = 2'd1, E_WAIT = 2'd2;
     reg [1:0] estate;
+    reg       tx_from_cpu;            // the byte in flight is the host CPU's
+    reg [7:0] tx_byte;
     always @(posedge sys_clk) begin
         if (sys_reset) begin
             estate <= E_IDLE; tx_start <= 1'b0; emit_ready <= 1'b0;
+            cpu_tx_done <= 1'b0; tx_from_cpu <= 1'b0; tx_byte <= 8'd0; cpu_tx_take <= 1'b0;
         end else begin
-            tx_start <= 1'b0; emit_ready <= 1'b0;
+            tx_start <= 1'b0; emit_ready <= 1'b0; cpu_tx_done <= 1'b0; cpu_tx_take <= 1'b0;
             case (estate)
                 // !emit_ready: during the ack cycle the GPU hasn't dropped
                 // emit_valid yet (its FSM is registered); launching then would
-                // send every byte twice.
+                // send every byte twice. GPU bytes go first; the host CPU's
+                // byte goes when the GPU has none.
                 E_IDLE: if (emit_valid && !uart_busy && !emit_ready) begin
                             tx_start <= 1'b1;            // launch emit_data
+                            tx_byte  <= emit_data;
+                            tx_from_cpu <= 1'b0;
+                            estate   <= E_SEND;
+                        end else if (cpu_tx_req && !uart_busy && !cpu_tx_take) begin
+                            tx_start <= 1'b1;
+                            cpu_tx_take <= 1'b1;
+                            tx_byte  <= cpu_tx_byte;
+                            tx_from_cpu <= 1'b1;
                             estate   <= E_SEND;
                         end
                 E_SEND: if (uart_busy) estate <= E_WAIT; // byte started
                 E_WAIT: if (!uart_busy) begin            // byte fully sent
-                            emit_ready <= 1'b1;          // ack the GPU's STR
+                            if (tx_from_cpu) cpu_tx_done <= 1'b1;
+                            else             emit_ready  <= 1'b1;   // ack the GPU's STR
                             estate     <= E_IDLE;
                         end
             endcase
@@ -274,7 +398,7 @@ module top #(
 
     uart_tx #(.BAUD_LIMIT(CLK_FREQ / BAUD_RATE)) u_tx (
         .clk(sys_clk), .reset(sys_reset),
-        .data_in(emit_data), .tx_start(tx_start),
+        .data_in(tx_byte), .tx_start(tx_start),
         .tx_out(uart_tx_out), .tx_busy(uart_busy)
     );
 
@@ -282,7 +406,7 @@ module top #(
     // 2 cores x 4 waves (raycast.jpp) x BLOCK_DIM threads = one byte per column.
     hdmi_columns #(.COLS(8 * BLOCK_DIM)) u_hdmi (
         .clk27(clk), .sys_clk(sys_clk),
-        .run_start(gpu_start), .byte_valid(tx_start), .byte_data(emit_data),
+        .run_start(gpu_start), .byte_valid(tx_start), .byte_data(tx_byte),
         .tmds_clk_p(tmds_clk_p), .tmds_clk_n(tmds_clk_n),
         .tmds_d_p(tmds_d_p), .tmds_d_n(tmds_d_n)
     );

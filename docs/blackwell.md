@@ -17,6 +17,7 @@ drive each one and the testbench that proves it.
 | [Global memory: SDRAM + L1](#global-memory-sdram--l1) | HBM3e + memory controllers, per-SM L1 | `make sim-sdram`, `make sim-global` |
 | [Clusters: DSMEM, CBAR, MMA2](#clusters-dsmem-cbar-mma2) | thread-block clusters, distributed shared memory, `cta_group::2` | `make sim-cluster` |
 | [Overlapped issue](#overlapped-issue) | the SM's instruction pipeline | `make sim-cpi` |
+| [On-chip host CPU](#on-chip-host-cpu) | Grace + NVLink-C2C (GB200's CPU sharing memory with the GPU) | `make sim-host` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -390,6 +391,45 @@ per cycle would need a control bundle per pipeline stage (today every unit
 reads the one decoder's outputs), a scoreboard, and per-stage warp tags.
 That is the next step, and it is a rewrite of the core's control path, not a
 patch.
+
+---
+
+## On-chip host CPU
+
+A GB200 is not just GPUs: a Grace CPU sits beside them and shares one memory
+space with them over NVLink-C2C, so the CPU hands the GPU work and reads its
+results without a PCIe hop. Until now this design's host was always the PC
+on the other end of a UART.
+
+`src/host_cpu.sv` is a small RV32I core (multi-cycle, no cache, 4 KB of
+local RAM for firmware and stack) that can sit on the same die
+(`top` parameter `HOST_CPU=1`). It reaches the GPU's global memory through
+the same SDRAM arbiter the GPU cores use, as a fourth client. That is the
+C2C part: CPU and GPU see one memory, with no copy in between.
+
+| CPU address | What |
+|---|---|
+| `0x0000_0000` | 4 KB local RAM (firmware, data, stack) |
+| `0x1000_0000 + 4i` | GPU instruction word i (write) |
+| `0x2000_0000 + a` | global memory byte a (the SDRAM) |
+| `0x3000_0000` | write: launch a grid (bits 7:0 gridDim, bit 8 cluster); read: bit 0 = no run in flight |
+| `0x3000_0004` | write: send a byte on the UART (blocks until sent) |
+
+The firmware is C (`software/fw/host.c`), built with the system clang for
+rv32i (`software/fw/build.py`, linker script `software/fw/link.ld`). The
+GPU kernel's machine code is compiled into the firmware as an array.
+
+`make sim-host`: nothing is sent *into* the board. The CPU copies the kernel
+into the GPU's instruction memory, writes 8 inputs to SDRAM, launches a
+2-block grid, polls until it finishes, reads the 8 results back from SDRAM,
+checks them itself, and sends them out over the UART followed by `P` or `F`.
+The bench checks the UART bytes and the SDRAM contents independently. With a
+planted bug in the GPU kernel, the firmware answers `F` and the bench
+reports 9 problems.
+
+Limits: kernels the CPU launches should keep their data in global memory.
+The cores' data memories (BRAM) are written by the DMA while it waits for a
+UART frame, so GPU stores to them are dropped during a CPU-launched run.
 
 ---
 
