@@ -13,6 +13,8 @@ module pc #(
     input wire enable,           // Is this specific thread active right now? [cite: 318]
     input wire warp_active,      // NEW: Warp-level masking
     input wire [3:0] core_state,  // The current step in the execution loop (4-bit)
+    input wire wb_en,             // W stage writes back this cycle (flags too)
+    input wire w_fast,            // ... and it is an overlapped (RUN) writeback
 
     // ==========================================
     // CONTROL PINS (From the Decoder)
@@ -84,7 +86,7 @@ module pc #(
             // UPDATING THE VAULT
             // ==========================================
             // When the Scheduler reaches State 6 (UPDATE) [cite: 325]
-            if (core_state == 4'b0111 && warp_active) begin // UPDATE
+            if (wb_en && warp_active) begin // W stage
                 
                 // If the Decoder tells us a CMP instruction just happened... [cite: 325]
                 if (decoded_nzp_write_enable) begin
@@ -99,6 +101,9 @@ module pc #(
     end
 
     // NEW: Expose the condition check result
-    assign branch_taken = ((nzp & decoded_nzp) != 3'b0);
+    // A CMP whose writeback happens this cycle (in RUN) has not reached nzp
+    // yet: forward its flags to the branch executing behind it.
+    wire [2:0] nzp_eff = (w_fast && warp_active && decoded_nzp_write_enable) ? alu_out[2:0] : nzp;
+    assign branch_taken = ((nzp_eff & decoded_nzp) != 3'b0);
 
 endmodule

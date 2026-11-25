@@ -147,11 +147,18 @@ module core #(
     // ==========================================
     // INSTANTIATE THE (REAL) DECODER
     // ==========================================
+    // ---- pipeline control (scheduler.sv RUN) ----
+    wire dec_latch, w_load, w_fast;
+    wire [3:0] decoded_opcode;
+    wire wb_en = (core_state == UPDATE_STATE) || w_fast;
+
     decoder #(.DATA_BITS(DATA_BITS)) core_decoder (
         .clk(clk),
         .reset(reset),
         .core_state(core_state),
         .instruction(current_instruction),
+        .latch(dec_latch),
+        .decoded_opcode(decoded_opcode),
 
         .decoded_rd_address(decoded_rd_address),
         .decoded_rs_address(decoded_rs_address),
@@ -230,6 +237,11 @@ module core #(
         .decoded_mem_op(decoded_mem_read_enable || decoded_mem_write_enable),
         .instruction(current_instruction),
         .fetch_addr(fetch_addr),
+        .decoded_reg_write_enable(decoded_reg_write_enable),
+        .decoded_rd_address(decoded_rd_address),
+        .dec_latch(dec_latch),
+        .w_load(w_load),
+        .w_fast(w_fast),
         .warp_emit(warp_emit),
 
         .current_warp(current_warp),
@@ -762,6 +774,38 @@ module core #(
         assign eng_sh_wbe = 4'd0;
     end endgenerate
 
+    // ==========================================
+    // W STAGE: the write-back half of the instruction that just executed
+    // ==========================================
+    // Loaded as an instruction leaves EXECUTE / RUN's X stage; the register
+    // file and the N/Z/P flags write from these, in UPDATE or (overlapped) in
+    // the next RUN cycle. LUI's result is computed here, from the operand it
+    // read, like any ALU result.
+    reg [3:0]           w_rd;
+    reg                 w_we, w_id_read, w_tc_read, w_nzp_we;
+    reg [1:0]           w_mux;
+    reg [3:0]           w_id_sel;
+    reg [DATA_BITS-1:0] w_imm;
+    reg [DATA_BITS-1:0] alu_w [THREADS_PER_BLOCK-1:0];
+    integer wl;
+    always @(posedge clk) begin
+        if (reset) begin
+            w_we <= 1'b0; w_nzp_we <= 1'b0; w_id_read <= 1'b0; w_tc_read <= 1'b0;
+        end else if (w_load) begin
+            w_rd      <= decoded_rd_address;
+            w_we      <= decoded_reg_write_enable;
+            w_mux     <= decoded_reg_input_mux;
+            w_id_read <= decoded_id_read;
+            w_id_sel  <= decoded_rs_address;
+            w_tc_read <= decoded_tld || decoded_tldq;
+            w_nzp_we  <= decoded_nzp_write_enable;
+            w_imm     <= decoded_immediate;
+            for (wl = 0; wl < THREADS_PER_BLOCK; wl = wl + 1)
+                alu_w[wl] <= decoded_lui ? ((active_rs[wl] << 6) | decoded_immediate[5:0])
+                                         : active_alu_out[wl];
+        end
+    end
+
     // Per-lane TLD/TLDQ value: lane i reads TMEM row i (rows 0..3; lanes
     // past the tile read 0).
     wire [DATA_BITS-1:0] tc_lane [THREADS_PER_BLOCK-1:0];
@@ -786,7 +830,7 @@ module core #(
 
             alu #(.DATA_BITS(DATA_BITS)) thread_alu (
                 .clk(clk),
-                .opcode(current_instruction[15:12]),
+                .opcode(decoded_opcode),
                 .imm(decoded_immediate),
                 .rs(active_rs[i]),
                 .rt(active_rt[i]),
@@ -820,26 +864,29 @@ module core #(
                     .thread_active(active_mask[w][i]),
                     .warp_active(warp_active_flag),
 
-                    .decoded_rd_address(decoded_rd_address),
-                    .decoded_rs_address(decoded_rs_address),
+                    .op_latch(dec_latch),
+                    .wb_en(wb_en),
+                    // write-back controls: the W-stage copies
+                    .decoded_rd_address(w_rd),
+                    .decoded_rs_address(w_id_sel),
                     .decoded_rt_address(decoded_rt_address),
                     .fetch_rs_address(fetch_rs),
                     .fetch_rt_address(fetch_rt),
 
-                    .decoded_reg_write_enable(decoded_reg_write_enable),
-                    .decoded_reg_input_mux(decoded_reg_input_mux),
-                    .decoded_id_read(decoded_id_read),
-                    .decoded_lui(decoded_lui),
-                    .decoded_immediate(decoded_immediate),
+                    .decoded_reg_write_enable(w_we),
+                    .decoded_reg_input_mux(w_mux),
+                    .decoded_id_read(w_id_read),
+                    .decoded_lui(1'b0),          // LUI's value is computed into alu_w
+                    .decoded_immediate(w_imm),
 
-                    .alu_out(active_alu_out[i]), // Fed from the shared ALU!
+                    .alu_out(alu_w[i]),          // the W-stage ALU result
                     .lsu_out(lsu_out_bus[w][i]),
 
                     .rs(rs_bus[w][i]),
                     .rt(rt_bus[w][i]),
 
                     .mac_result(mac_result_ext),
-                    .decoded_tc_read(decoded_tld || decoded_tldq),
+                    .decoded_tc_read(w_tc_read),
                     .tc_data(tc_lane[i]),
                     .debug_reg3(reg3_bus[w][i])
                 );
@@ -905,10 +952,12 @@ module core #(
 
                     .decoded_nzp(decoded_nzp),
                     .decoded_immediate(decoded_immediate[7:0]), // branch target: PC-domain (8-bit)
-                    .decoded_nzp_write_enable(decoded_nzp_write_enable),
+                    .decoded_nzp_write_enable(w_nzp_we),
+                    .wb_en(wb_en),
+                    .w_fast(w_fast),
                     .decoded_pc_mux(decoded_pc_mux),
 
-                    .alu_out(active_alu_out[i][7:0]), // pc only reads N/Z/P in [2:0]
+                    .alu_out(alu_w[i][7:0]),          // W-stage flags (N/Z/P in [2:0])
                     .branch_taken(all_branch_votes[w][i]),
 
                     .current_pc(pc_bus[w][i]),

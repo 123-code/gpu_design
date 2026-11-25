@@ -12,6 +12,9 @@ module decoder #(
 
     input wire [3:0] core_state,
     input wire [15:0] instruction,
+    // Latch strobe: DECODE, or RUN when the next instruction issues behind
+    // the one executing (scheduler.sv)
+    input wire latch,
     
     // ==========================================
     // PART 2: THE OUTPUT PINS (Wires going OUT)
@@ -96,7 +99,10 @@ module decoder #(
     // Clusters: CBAR = barrier across both blocks of the pair (0xF008);
     // MMA2 = tensor-core MMA with B split across the pair (MACL rd field 3)
     output reg decoded_cbar,
-    output reg decoded_mma2
+    output reg decoded_mma2,
+    // The opcode of the decoded instruction (the ALU must not read the live
+    // ROM output: in RUN that is already the NEXT instruction)
+    output reg [3:0] decoded_opcode
 );
 
     // Human-readable labels for the physical 4-bit Opcode wire combinations
@@ -174,10 +180,12 @@ module decoder #(
             decoded_global <= 0;
             decoded_cbar <= 0;
             decoded_mma2 <= 0;
+            decoded_opcode <= 0;
 
         end else begin
             // Only decode in the DECODE stage (4-bit state = 0011)
-            if (core_state == 4'b0011) begin
+            if (latch) begin
+                decoded_opcode <= instruction[15:12];
                 
                 // --- THE BIT SLICER ---
                 // Physically branching wires from the 16-lane 'instruction' bus to the output pins

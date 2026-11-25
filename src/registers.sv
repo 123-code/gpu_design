@@ -19,6 +19,11 @@ module registers #(
     input wire [7:0] grid_dim,    // blocks in the launch (%gridDim)
     input wire       cluster_rank, // rank in the cluster pair (%cluster_ctarank)
     input wire [3:0] core_state,  // Passed down from the Scheduler (4-bit)
+    // Pipeline strobes (scheduler.sv): op_latch = read rs/rt for the
+    // instruction being decoded; wb_en = write back the W-stage instruction.
+    // The decoded_* write controls below are the W-stage copies (core.sv).
+    input wire op_latch,
+    input wire wb_en,
     input wire thread_active,                      // From Stage 1: Thread-level masking
     input wire warp_active,                        // NEW: Warp-level maskingwake?
 
@@ -86,6 +91,30 @@ module registers #(
     // Debug tap (declared after the register array so the assign is legal)
     assign debug_reg3 = registers[3][7:0];
 
+    // The value the W stage writes this cycle (same selection as below), for
+    // the operand bypass
+    wire wb_hit = wb_en && decoded_reg_write_enable && decoded_rd_address < 13
+                  && thread_active && warp_active;
+    reg [DATA_BITS-1:0] wb_value;
+    always @(*) begin
+        if (decoded_id_read) begin
+            case (decoded_rs_address)
+                4'd1: wb_value = registers[15];
+                4'd2: wb_value = registers[13];
+                4'd3: wb_value = registers[14];
+                4'd5: wb_value = {{(DATA_BITS-8){1'b0}}, grid_dim};
+                4'd6: wb_value = {{(DATA_BITS-1){1'b0}}, cluster_rank};
+                default: wb_value = registers[15];
+            endcase
+        end else if (decoded_tc_read) wb_value = tc_data;
+        else case (decoded_reg_input_mux)
+            ARITHMETIC: wb_value = alu_out;
+            MEMORY:     wb_value = lsu_out;
+            CONSTANT:   wb_value = decoded_immediate;
+            default:    wb_value = mac_result;
+        endcase
+    end
+
     // The Clocked Logic Machinery
     always @(posedge clk) begin
         if (reset) begin
@@ -111,17 +140,19 @@ module registers #(
 
             // --- READ ACTION ---
             // When the Scheduler is in State 3 (REQUEST) [cite: 340]
-            if (core_state == 4'b0011 && warp_active) begin // DECODE: latch rs/rt
-                // Operand read happens in DECODE, from the raw instruction
-                // fields, so compute instructions skip REQUEST entirely. The
-                // previous instruction's writeback landed on the edge before.
-                rs <= registers[{1'b0, fetch_rs_address}];
-                rt <= registers[{1'b0, fetch_rt_address}];
+            if (op_latch && warp_active) begin // DECODE / RUN issue: latch rs/rt
+                // Operand read from the raw instruction fields. A writeback
+                // landing on this same edge is bypassed in, so an instruction
+                // two behind its producer needs no stall.
+                rs <= (wb_hit && decoded_rd_address[2:0] == fetch_rs_address) ? wb_value
+                                                                              : registers[{1'b0, fetch_rs_address}];
+                rt <= (wb_hit && decoded_rd_address[2:0] == fetch_rt_address) ? wb_value
+                                                                              : registers[{1'b0, fetch_rt_address}];
             end
 
             // --- WRITE ACTION ---
             // When the Scheduler is in State 6 (UPDATE) [cite: 341]
-            if (core_state == 4'b0111) begin // UPDATE: write back
+            if (wb_en) begin // W stage: write back
 
                 // Only write if the Decoder says so, AND thread active is on
                 if (decoded_reg_write_enable && decoded_rd_address < 13 && thread_active && warp_active) begin

@@ -40,6 +40,13 @@ module scheduler #(
     // 1 if this instruction touches the LSU (LDR/STR/emit). Compute-only
     // instructions skip REQUEST/WAIT (they are pass-through for them).
     input wire decoded_mem_op,
+    // The executing instruction's register write (RAW hazard check in RUN)
+    input wire decoded_reg_write_enable,
+    input wire [3:0] decoded_rd_address,
+    // Pipeline strobes (see RUN below)
+    output wire dec_latch,         // decoder + operand latch for the next instruction
+    output wire w_load,            // the executing instruction moves to W
+    output reg  w_fast,            // W writes back in a RUN cycle (overlapped)
 
     // The raw instruction word (ROM output). DECODE classifies it before the
     // registered decoder has caught up, to pick EXECUTE or REQUEST.
@@ -60,7 +67,7 @@ module scheduler #(
 //starts at idle, waiting for a sognal to run, once the dispatcher loads the image , the shceduler transitions to fetch
     localparam IDLE = 4'b0000, SELECT_WARP = 4'b0001, FETCH = 4'b0010, DECODE = 4'b0011,
                REQUEST = 4'b0100, WAIT = 4'b0101, EXECUTE = 4'b0110,
-               UPDATE = 4'b0111, DONE = 4'b1000;
+               UPDATE = 4'b0111, DONE = 4'b1000, RUN = 4'b1001;
 
     // WARP_BARRIER: parked at a BAR until every live warp of the block arrives
     localparam WARP_READY = 2'b00, WARP_WAITING = 2'b01, WARP_DONE = 2'b10,
@@ -132,8 +139,18 @@ module scheduler #(
             end
         end
     end
-    assign fetch_addr = (core_state == UPDATE && nx_found) ? warp_pc[nx_warp]
-                                                            : warp_pc[current_warp];
+    // Instruction memory address. In DECODE of a fast instruction, prefetch
+    // the next one; in RUN, keep one instruction ahead of X (or hold D while
+    // it waits out a hazard).
+    reg [7:0] fetch_r;
+    always @(*) begin
+        if (core_state == UPDATE && nx_found)                    fetch_r = warp_pc[nx_warp];
+        else if (core_state == DECODE && d_fast)                 fetch_r = warp_pc[current_warp] + 8'd1;
+        else if (core_state == RUN && x_valid)                   fetch_r = warp_pc[current_warp] + (run_adv ? 8'd2 : 8'd1);
+        else if (core_state == RUN)                              fetch_r = warp_pc[current_warp] + (run_adv ? 8'd1 : 8'd0);
+        else                                                     fetch_r = warp_pc[current_warp];
+    end
+    assign fetch_addr = fetch_r;
 
     // DECODE routing from the raw word: loads/stores need REQUEST (the LSU
     // starts there) and WAIT; tensor-core and copy-engine instructions need
@@ -146,14 +163,63 @@ module scheduler #(
                       || (op == 4'b1001 && instruction[10])                // TMA, TMAG
                       || (op == 4'b1111 && instruction[2]);                // TMAWAIT
 
+    // ------------------------------------------------------------------
+    // RUN: pipelined issue for "fast" instructions (ALU, MOV family, CMP,
+    // BRn). RUN executes one instruction (X) while the next one (D, at the
+    // ROM output: it was prefetched at X's PC + 1) is decoded and has its
+    // operands read, and the one before X writes back (W). One instruction
+    // per cycle while nothing interferes:
+    //   - D depends on X's result      -> one bubble (D reads it from the
+    //                                      W-stage bypass a cycle later)
+    //   - X redirects control (a taken or divergent branch), D is not a
+    //     fast instruction, or a lower-index warp became ready
+    //                                   -> X finishes through UPDATE, which
+    //                                      fetches whatever runs next
+    // Everything else (memory, tensor core, copy engine, RET/SYNC/BAR...)
+    // takes the DECODE -> (REQUEST/WAIT) -> EXECUTE -> UPDATE path.
+    // ------------------------------------------------------------------
+    reg x_valid;                      // RUN: an instruction is in X this cycle
+    function automatic is_fast(input [15:0] ins);
+        case (ins[15:12])
+            4'b0001, 4'b0101, 4'b1110, 4'b1010, 4'b1100, 4'b1101,   // ADD ADDI SUB MUL SHR SHL
+            4'b0010, 4'b0011, 4'b1000: is_fast = 1'b1;              // MOV-family CMP BRn
+            default: is_fast = 1'b0;
+        endcase
+    endfunction
+    wire       d_fast  = is_fast(instruction);
+    wire [3:0] d_op    = instruction[15:12];
+    wire       d_lui   = (d_op == 4'b0010) && (instruction[8:6] == 3'b100);
+    wire [2:0] d_rs    = d_lui ? instruction[11:9] : instruction[8:6];
+    wire       d_rd_rs = d_lui || d_op == 4'b0001 || d_op == 4'b0101 || d_op == 4'b1110 ||
+                         d_op == 4'b1010 || d_op == 4'b1100 || d_op == 4'b1101 || d_op == 4'b0011;
+    wire       d_rd_rt = d_op == 4'b0001 || d_op == 4'b1110 || d_op == 4'b1010 ||
+                         d_op == 4'b1100 || d_op == 4'b1101 || d_op == 4'b0011;
+    wire       x_writes = x_valid && decoded_reg_write_enable;
+    wire       hazard  = x_writes && ((d_rd_rs && d_rs == decoded_rd_address[2:0]) ||
+                                      (d_rd_rt && instruction[2:0] == decoded_rd_address[2:0]));
+    reg        lower_ready;           // a lower-index warp is ready: let the scheduler switch
+    always @(*) begin
+        lower_ready = 1'b0;
+        for (integer lw = 0; lw < WARPS_PER_CORE; lw = lw + 1)
+            if (lw < current_warp && warp_status[lw] == WARP_READY) lower_ready = 1'b1;
+    end
+    wire x_redirect;                  // X is a taken or divergent branch
+    wire run_adv  = (core_state == RUN) && d_fast && !lower_ready && !hazard && !(x_valid && x_redirect);
+    wire run_stall = (core_state == RUN) && x_valid && !x_redirect && d_fast && !lower_ready && hazard;
+    assign dec_latch = (core_state == DECODE) || run_adv;
+    assign w_load    = (core_state == EXECUTE) || (core_state == RUN && x_valid);
+
     wire [THREADS_PER_BLOCK-1:0] want_to_branch = branch_votes & active_mask[current_warp];
     wire [THREADS_PER_BLOCK-1:0] want_to_stay   = (~branch_votes) & active_mask[current_warp];
+    assign x_redirect = decoded_pc_mux && (want_to_branch != 0);
 
     always @(posedge clk) begin //every time the clock ticks,the sceduler checks its state
         if (reset) begin//reset , core state goes to IDLE
             core_state <= IDLE;
             done <= 0;
             current_warp <= 0;
+            x_valid <= 1'b0;
+            w_fast <= 1'b0;
             tc_parked <= '0;
             tma_parked <= '0;
             bar_cluster <= 1'b0;
@@ -250,9 +316,14 @@ module scheduler #(
             DECODE: begin
                 // The register file latches rs/rt THIS cycle, straight from
                 // the instruction word, so a compute instruction can execute
-                // next cycle. Memory / tensor-core / copy-engine ops still go
-                // through REQUEST.
-                core_state <= needs_request ? REQUEST : EXECUTE;
+                // next cycle. Fast instructions enter the pipelined RUN state
+                // (the next instruction is being prefetched now); memory /
+                // tensor-core / copy-engine ops still go through REQUEST.
+                if (d_fast) begin
+                    core_state <= RUN;
+                    x_valid    <= 1'b1;
+                end else
+                    core_state <= needs_request ? REQUEST : EXECUTE;
             end
             REQUEST: begin
                 // For compute-only instructions WAIT is pure pass-through (the LSU
@@ -295,10 +366,33 @@ module scheduler #(
                     core_state <= EXECUTE;
                 end
             end
-            EXECUTE: begin//performs operations, moves to update, operatins must be done in a single clock cycle
+            EXECUTE, RUN: begin//performs operations, moves to update, operatins must be done in a single clock cycle
                 reg [1:0]  sp;          // this warp's current stack pointer
                 integer    e_pop, e_push; // flat stack entry index (w*SDEPTH + level)
-                core_state <= UPDATE;
+                w_fast <= 1'b0;
+                if (core_state == EXECUTE) core_state <= UPDATE;
+                else begin
+                    // RUN: what happens next (the X-stage effects below run
+                    // only when x_valid)
+                    if (x_valid) begin
+                        if (run_adv) begin                 // D issues behind X
+                            x_valid <= 1'b1; w_fast <= 1'b1; core_state <= RUN;
+                        end else if (run_stall) begin      // bubble, then D
+                            x_valid <= 1'b0; w_fast <= 1'b1; core_state <= RUN;
+                        end else begin                     // X finishes alone
+                            x_valid <= 1'b0; core_state <= UPDATE;
+                        end
+                    end else begin
+                        if (run_adv) begin
+                            x_valid <= 1'b1; core_state <= RUN;
+                        end else begin
+                            // D cannot issue here: refetch it the normal way
+                            // (warp_pc already points at it)
+                            core_state <= (lower_ready || d_fast) ? SELECT_WARP : DECODE;
+                        end
+                    end
+                end
+                if (core_state == EXECUTE || x_valid) begin
                 sp = stack_ptr[current_warp*2 +: 2];
                 if (decoded_sync) begin
                     if (sp > 0) begin
@@ -336,8 +430,10 @@ module scheduler #(
                 end else begin
                     warp_pc[current_warp] <= warp_pc[current_warp] + 1;
                 end
+                end
             end
-            UPDATE: begin // depending on decoded_ret, if high, we're done, if low, we fetch another instrcution
+            UPDATE: begin
+                w_fast <= 1'b0; // depending on decoded_ret, if high, we're done, if low, we fetch another instrcution
                 if (decoded_ret) begin
                     warp_status[current_warp] <= WARP_DONE;
                 end else if (decoded_bar) begin

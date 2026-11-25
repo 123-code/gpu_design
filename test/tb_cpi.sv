@@ -29,7 +29,10 @@ module tb;
     always @(posedge clk) begin
         if (dut.uut.core_0_busy && !dut.uut.core_0_done) begin
             cycles = cycles + 1;
+            // an instruction issues through DECODE, or straight from the
+            // pipeline in RUN (run_adv)
             if (dut.uut.compute_core_0.core_state == 4'b0011) instrs = instrs + 1;
+            if (dut.uut.compute_core_0.core_scheduler.run_adv) instrs = instrs + 1;
         end
     end
 
@@ -51,7 +54,7 @@ module tb;
         cpi100 = (100 * cycles) / instrs;
         $display("%0d warp(s): %0d instructions in %0d cycles = %0d.%02d cycles/instruction",
                  BD/4, instrs, cycles, cpi100 / 100, cpi100 % 100);
-        if (cpi100 > 320) begin fails = fails + 1; $display("  issue loop slower than 3.2 cycles/instr"); end
+        if (cpi100 > 200) begin fails = fails + 1; $display("  issue loop slower than 2.0 cycles/instr"); end
         if (fails == 0)
             $display("RESULT: PASS - %0d warp(s): %0d.%02d cycles/instruction, loop result right in every lane",
                      BD/4, cpi100 / 100, cpi100 % 100);

@@ -16,7 +16,7 @@ drive each one and the testbench that proves it.
 | [TMA bulk copy](#tma-bulk-copy) | Tensor Memory Accelerator, `cp.async.bulk` | `make sim-tma` |
 | [Global memory: SDRAM + L1](#global-memory-sdram--l1) | HBM3e + memory controllers, per-SM L1 | `make sim-sdram`, `make sim-global` |
 | [Clusters: DSMEM, CBAR, MMA2](#clusters-dsmem-cbar-mma2) | thread-block clusters, distributed shared memory, `cta_group::2` | `make sim-cluster` |
-| [Overlapped issue](#overlapped-issue) | the SM's instruction pipeline | `make sim-cpi` |
+| [Overlapped and pipelined issue](#overlapped-issue) | the SM's instruction pipeline | `make sim-cpi` |
 | [On-chip host CPU](#on-chip-host-cpu) | Grace + NVLink-C2C (GB200's CPU sharing memory with the GPU) | `make sim-host` |
 | [Board-to-board link](#board-to-board-link) | NVLink / NVL72 (GPUs storing into each other's memory) | `make sim-link` |
 | [Linear on the tensor core](#linear-on-the-tensor-core) | cuBLAS/CUTLASS lowering a GEMM onto tensor cores | `make fuzz-tc`, `make sim-mlc MLC_FLAGS=--tc` |
@@ -388,14 +388,58 @@ per lane), which this change does not touch.
 quietly lengthens the issue loop is caught (the previous design fails it at
 6.0).
 
-**What this is not.** A real SM issues an instruction every cycle,
-interleaving warps through a deep pipeline and using a scoreboard to track
-which registers are still being written. Here each warp has one instruction
-in flight and the core one instruction at a time. Getting to one instruction
-per cycle would need a control bundle per pipeline stage (today every unit
-reads the one decoder's outputs), a scoreboard, and per-stage warp tags.
-That is the next step, and it is a rewrite of the core's control path, not a
-patch.
+### Pipelined issue (RUN)
+
+The next step overlaps instructions of the same warp. A new scheduler state,
+RUN, executes one instruction (X) while the next one (D, prefetched at X's
+PC + 1) is decoded and has its operands read, and the one before X writes
+back (W):
+
+```
+cycle      t      t+1     t+2     t+3
+ADD R1    D       X       W
+ADD R4            D       -       X       W     (needs R1: one bubble)
+CMP                               D       X  ...
+```
+
+What made that possible:
+
+- **Per-stage control.** The decoder latches on a strobe (DECODE, or RUN
+  when the next instruction issues) instead of `core_state == DECODE`, and
+  the core keeps a registered **W-stage bundle**: destination, write enable,
+  writeback mux, the per-lane ALU result (LUI's included), flag write. The
+  register file and the N/Z/P flags write from that bundle, so the next
+  instruction's decode can overwrite the decoder's outputs safely. The ALU
+  takes its opcode from the decoder, not the live ROM output (in RUN that is
+  already the next instruction).
+- **Hazards.** An instruction that reads the register X is writing waits one
+  cycle (a bubble); one cycle later it reads the value off the W-stage
+  bypass in the register file. A branch reads flags a CMP right before it
+  has not written yet: the PC module forwards the W-stage flags.
+- **What leaves RUN.** A taken or divergent branch, an instruction that is
+  not ALU / MOV-family / CMP / BRn, or a lower-index warp becoming ready
+  (the scheduling policy is unchanged) finishes X through UPDATE, which
+  fetches whatever runs next. Memory, tensor-core, copy-engine, RET, SYNC
+  and barriers keep the DECODE -> REQUEST/WAIT -> EXECUTE -> UPDATE path.
+
+| compute loop (`make sim-cpi`: ADD, dependent ADD, CMP, taken BRn) | cycles / instruction |
+|---|---|
+| original FSM | 6.01 |
+| overlapped fetch | 3.02 |
+| pipelined issue (RUN), 1 warp | 1.77 |
+| pipelined issue (RUN), 2 warps | 1.75 |
+
+The loop's 1.77 is 7 cycles for 4 instructions: one bubble for the
+dependent ADD and two for the taken branch (UPDATE, then DECODE at the
+target). `make sim-cpi` now fails above 2.0.
+
+**What this still is not.** A real SM issues from a different warp almost
+every cycle and tracks outstanding writes with a scoreboard, so a branch or
+a dependency costs nothing as long as another warp is ready. Here one warp
+runs until it stalls, branches are not predicted, and anything slower than
+an ALU op leaves the pipeline. That is a narrower machine, and loads, MACs
+and tensor-core instructions do not get faster: the compiled models, which
+are load-bound, barely move.
 
 ---
 
