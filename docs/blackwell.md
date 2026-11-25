@@ -12,6 +12,7 @@ drive each one and the testbench that proves it.
 | [Grid scheduling](#grid-scheduling) | CTA scheduler, `gridDim` | `make sim-grid` |
 | [Shared memory + barrier](#shared-memory--barrier) | `__shared__`, `__syncthreads()` | `make sim-smem` |
 | [Tensor core + TMEM](#tensor-core--tmem) | 5th-gen tensor core, `tcgen05.mma` / `.ld`, Tensor Memory | `make sim-mma` |
+| [FP8 / FP4 / MX block scaling](#fp8--fp4--mx-block-scaling) | `kind::f8f6f4`, `kind::mxf4` (2nd-gen Transformer Engine) | `make sim-mma-all` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -132,6 +133,48 @@ busy with the first, overwrite a second tile), and reads both tiles back
 with `TLD` and tile 0 with `TLDQ`. All 144 result bytes must match on both
 cores. The test was checked against two planted bugs (a wrong expected byte,
 `accumulate` forced off); both fail it.
+
+---
+
+## FP8 / FP4 / MX block scaling
+
+Blackwell's headline addition is low-precision tensor math: FP8, FP6, FP4,
+and *microscaling* (MX) formats where a block of values shares one
+power-of-two scale. `TCFG` selects the kind for subsequent MMAs:
+
+| kind | Format | K per MMA | Operand word holds |
+|---|---|---|---|
+| 0 `s8` | int8 x int8 -> int32 | 4 | 4 bytes |
+| 1 `e4m3` | FP8, 1-4-3, bias 7 | 4 | 4 bytes |
+| 2 `e2m1` | FP4, 1-2-1, bias 1 | 8 | 8 nibbles, low first |
+| 3 `mxf4` | e2m1 + E8M0 block scales | 8 | 8 nibbles; 4 scale bytes follow the tile |
+
+FP4 gets twice the K for the same operand bytes, as on Blackwell: its
+multiplier is a handful of LUTs. For `mxf4`, row i of A and column j of B
+each carry an E8M0 scale (2^(s-127)); the four scale bytes sit right after
+the 16-byte tile, and the unit fetches them as a fifth word. The block is one
+MMA's K = 8 (OCP MX uses 32; NVFP4 uses 16 with an E4M3 scale).
+
+**How the math works, and its one rounding.** Every e4m3 code is
+`M * 2^(E-9)` with a 4-bit M, and every e2m1 code is `M * 2^(E-1)` with a
+2-bit M. So the product of two codes is an exact integer number of 2^-18
+(e4m3) or 2^-2 (e2m1) units, and a K-long dot product can be summed exactly
+in a wide integer: no alignment loss, no order dependence. Only then is it
+moved into D, which for the float kinds is fixed point with 8 fractional bits
+(Q.8). For e2m1 that is an exact left shift. For e4m3, and for MX scales
+below 2^-6, it is an arithmetic right shift, i.e. floor. The MX shift is
+clamped to [-24, 24]. D wraps mod 2^32. That single, documented rounding is
+why `software/tc_ref.py` can match the hardware bit for bit. There are no
+NaN or infinity codes (e2m1 has none; e4m3's NaN code reads as 480).
+
+This is a deliberate simplification of real tensor cores, which accumulate in
+FP32. Fixed-point accumulation is exact within a dot product, cheap in LUTs,
+and deterministic. Its limit is range: D is a 32-bit Q.8.
+
+`make sim-mma-all` runs the tensor-core test for every kind: random operand
+codes (every e4m3 exponent, every e2m1 code, MX scales spread so the shift
+clamp is hit from both sides), checked against the model byte for byte on
+both cores. Seeds 1-3 pass for all four kinds.
 
 ---
 

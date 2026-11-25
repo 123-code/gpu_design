@@ -101,7 +101,7 @@ def kernel(kind, tma=False):
     e("        CMP  R0, R7")
     e("        BRn  copy")
     # 2. configure + MMAs (issued by lane 0; operand addresses are uniform)
-    e(f"        MOV  R0, #{(q << 3) | kind}")
+    e(f"        LDI  R0, #{(q << 3) | kind}")
     e("        TCFG R0               // kind + TLDQ shift")
     e("        MOV  R2, #0           // A0")
     e("        MOV  R3, #32          // B0")
@@ -117,7 +117,7 @@ def kernel_tma(kind, q, L):
     """Same MMAs, but the copy engine stages the operands, and the second
     pair of tiles streams in WHILE the first MMA runs."""
     e = L.append
-    e(f"        MOV  R0, #{(q << 3) | kind}")
+    e(f"        LDI  R0, #{(q << 3) | kind}")
     e("        TCFG R0")
     e("        MOV  R2, #0")
     e("        MOV  R3, #32")

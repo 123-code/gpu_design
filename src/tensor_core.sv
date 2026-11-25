@@ -22,12 +22,27 @@
 // MMA updates a whole column per write and a TLD hands every lane its row in
 // one read. It is a single-read, single-write array (inferred as BSRAM).
 //
-// Kinds (TCFG):  0 s8 : int8 x int8 -> int32 accumulate
+// Kinds (TCFG kind field), the Blackwell low-precision formats:
+//   0 s8    int8 x int8, K = 4.            D is a plain int32.
+//   1 e4m3  FP8  (1-4-3), K = 4.           D is fixed point, 8 frac bits.
+//   2 e2m1  FP4  (1-2-1), K = 8, two per byte (low nibble first). Q.8.
+//   3 mxf4  e2m1 with OCP-MX block scales, K = 8. Each row of A and each
+//           column of B carries one E8M0 scale (2^(s-127)); the 4 scale
+//           bytes sit right after the tile (A+16, B+16). Block = one MMA's K.
 //
-// Timing per MMA: 8 shared-memory reads to stage A and B (pipelined, one
-// per cycle once the port is granted), then 5 cycles per output column
-// (4 rows x one 4-wide dot product each, plus the TMEM write) = ~30 cycles
-// for 64 MACs, with 4 multipliers.
+// Float math is EXACT up to a single documented rounding: every product of
+// two e4m3 (or e2m1) codes is an integer number of 2^-18 (or 2^-2) units,
+// so each K-long dot product is summed exactly in a wide integer, and only
+// then moved into D's Q.8 format -- a left shift (exact), or for e4m3 /
+// small MX scales an arithmetic right shift (floor). software/tc_ref.py is
+// the bit-exact model. No NaN/Inf: every code is a number (e2m1 has none;
+// e4m3's NaN code reads as 480). FP4 multiplies are a few LUTs each, which
+// is why Blackwell doubles K for them; here too, K = 8 vs 4.
+//
+// Timing per MMA: 8 (10 for mxf4) shared-memory reads to stage A and B
+// (pipelined, one per cycle once the port is granted), then 5 cycles per
+// output column (4 rows x one K-wide dot product each, plus the TMEM write):
+// ~30 cycles for 64 int8/fp8 MACs or 128 fp4 MACs.
 // ============================================================================
 module tensor_core #(
     parameter TMEM_COLS = 16
@@ -81,6 +96,7 @@ module tensor_core #(
     // ---------------- staged operands ----------------
     reg [31:0] a_row [0:3];           // A[i][k] = a_row[i][8k +: 8]
     reg [31:0] b_col [0:3];           // B[k][j] = b_col[j][8k +: 8]
+    reg [31:0] a_scl, b_scl;          // mxf4: E8M0 scale of row i / column j
 
     // ---------------- sequencer ----------------
     localparam S_IDLE = 2'd0, S_LOAD = 2'd1, S_DOT = 2'd2, S_WB = 2'd3;
@@ -91,27 +107,103 @@ module tensor_core #(
     reg [9:0] a_base, b_base;
     reg [1:0] tile;
     reg       acc;
-    reg [3:0] ld_cnt;                 // next operand word to address (0..7)
+    reg [3:0] ld_cnt;                 // next operand word to address (0..9)
     reg       ld_pend;                // an address went out last cycle
     reg [3:0] ld_item;                // ... for this operand word
     reg [1:0] col, row;
     reg signed [31:0] dot_r [0:3];    // this column's four dot products
 
-    // operand word n: 0..3 = A rows, 4..7 = B columns
+    // operand word n: 0..3 = A rows, 4..7 = B columns, 8/9 = A/B scales (mxf4)
+    wire [3:0] n_items = (kind == 3'd3) ? 4'd10 : 4'd8;
     always @(*) begin
-        if (ld_cnt < 4) sh_raddr = a_base[9:2] + {6'd0, ld_cnt[1:0]};
-        else            sh_raddr = b_base[9:2] + {6'd0, ld_cnt[1:0]};
+        if (ld_cnt < 4)       sh_raddr = a_base[9:2] + {6'd0, ld_cnt[1:0]};
+        else if (ld_cnt < 8)  sh_raddr = b_base[9:2] + {6'd0, ld_cnt[1:0]};
+        else if (ld_cnt == 8) sh_raddr = a_base[9:2] + 8'd4;
+        else                  sh_raddr = b_base[9:2] + 8'd4;
     end
 
-    // ---------------- datapath: one 4-wide dot product per cycle ----------------
+    // ---------------- datapath: one K-wide dot product per cycle ----------------
     wire [31:0] arow = a_row[row];
     wire [31:0] bcol = b_col[col];
-    reg  signed [31:0] dot;
+
+    // s8: four signed 8x8 products
+    reg signed [31:0] dot_s8;
     integer k;
     always @(*) begin
-        dot = 32'sd0;
+        dot_s8 = 32'sd0;
         for (k = 0; k < 4; k = k + 1)
-            dot = dot + $signed(arow[8*k +: 8]) * $signed(bcol[8*k +: 8]);
+            dot_s8 = dot_s8 + $signed(arow[8*k +: 8]) * $signed(bcol[8*k +: 8]);
+    end
+
+    // e4m3: value = M * 2^(E-9), M = {e!=0, mant}, E = max(e,1)-1.
+    // Product of two = (Ma*Mb) << (Ea+Eb) units of 2^-18; four summed
+    // exactly in 40 bits.
+    function automatic [39:0] fp8_prod(input [7:0] a, input [7:0] b);
+        reg [3:0] ma, mb, ea, eb;
+        reg [7:0] m;
+        reg [4:0] sh;                    // ea+eb reaches 28: needs 5 bits
+        reg [39:0] mag;
+        begin
+            ma = {(a[6:3] != 4'd0), a[2:0]};
+            mb = {(b[6:3] != 4'd0), b[2:0]};
+            ea = (a[6:3] == 4'd0) ? 4'd0 : a[6:3] - 4'd1;
+            eb = (b[6:3] == 4'd0) ? 4'd0 : b[6:3] - 4'd1;
+            m   = ma * mb;
+            sh  = {1'b0, ea} + {1'b0, eb};
+            mag = {32'd0, m} << sh;
+            fp8_prod = (a[7] ^ b[7]) ? -mag : mag;
+        end
+    endfunction
+    reg signed [39:0] dot_fp8;
+    always @(*) begin
+        dot_fp8 = 40'sd0;
+        for (k = 0; k < 4; k = k + 1)
+            dot_fp8 = dot_fp8 + $signed(fp8_prod(arow[8*k +: 8], bcol[8*k +: 8]));
+    end
+
+    // e2m1: value = M * 2^(E-1), M = {e!=0, mant}, E = max(e,1)-1.
+    // Product = (Ma*Mb) << (Ea+Eb) units of 2^-2 (at most 144); eight summed.
+    function automatic [15:0] fp4_prod(input [3:0] a, input [3:0] b);
+        reg [1:0] ma, mb, ea, eb;
+        reg [3:0] m;                     // up to 9: a 2x2-bit product needs 4 bits
+        reg [2:0] sh;                    // up to 4
+        reg [15:0] mag;
+        begin
+            ma = {(a[2:1] != 2'd0), a[0]};
+            mb = {(b[2:1] != 2'd0), b[0]};
+            ea = (a[2:1] == 2'd0) ? 2'd0 : a[2:1] - 2'd1;
+            eb = (b[2:1] == 2'd0) ? 2'd0 : b[2:1] - 2'd1;
+            m   = ma * mb;
+            sh  = {1'b0, ea} + {1'b0, eb};
+            mag = {12'd0, m} << sh;
+            fp4_prod = (a[3] ^ b[3]) ? -mag : mag;
+        end
+    endfunction
+    reg signed [15:0] dot_fp4;
+    always @(*) begin
+        dot_fp4 = 16'sd0;
+        for (k = 0; k < 8; k = k + 1)
+            dot_fp4 = dot_fp4 + $signed(fp4_prod(arow[4*k +: 4], bcol[4*k +: 4]));
+    end
+
+    // mxf4 shift: the two E8M0 scales, plus 6 to go from 2^-2 units to Q.8,
+    // clamped to [-24, 24]
+    wire [7:0] sa = a_scl[8*row +: 8];
+    wire [7:0] sb = b_scl[8*col +: 8];
+    wire signed [10:0] mx_raw = $signed({3'b000, sa}) + $signed({3'b000, sb}) - 11'sd248;
+    wire signed [10:0] mx_sh  = (mx_raw > 11'sd24) ? 11'sd24 : (mx_raw < -11'sd24) ? -11'sd24 : mx_raw;
+    wire signed [39:0] fp4_wide = dot_fp4;
+    wire signed [39:0] mx_val = (mx_sh >= 0) ? (fp4_wide <<< mx_sh[4:0]) : (fp4_wide >>> (-mx_sh));
+
+    // What this (row, col) adds to D, mod 2^32
+    reg signed [31:0] dot;
+    always @(*) begin
+        case (kind)
+            3'd1:    dot = dot_fp8 >>> 10;           // 2^-18 units -> Q.8, floor
+            3'd2:    dot = {{16{dot_fp4[15]}}, dot_fp4} <<< 6;  // 2^-2 -> Q.8, exact
+            3'd3:    dot = mx_val[31:0];
+            default: dot = dot_s8;
+        endcase
     end
 
     // D column update: old value (or 0) + this MMA's contribution, mod 2^32
@@ -158,14 +250,16 @@ module tensor_core #(
                 S_LOAD: begin
                     ld_pend <= 1'b0;
                     if (ld_pend) begin
-                        if (ld_item < 4) a_row[ld_item[1:0]] <= sh_rdata;
-                        else             b_col[ld_item[1:0]] <= sh_rdata;
+                        if (ld_item < 4)       a_row[ld_item[1:0]] <= sh_rdata;
+                        else if (ld_item < 8)  b_col[ld_item[1:0]] <= sh_rdata;
+                        else if (ld_item == 8) a_scl <= sh_rdata;
+                        else                   b_scl <= sh_rdata;
                     end
-                    if (sh_gnt && ld_cnt < 4'd8) begin
+                    if (sh_gnt && ld_cnt < n_items) begin
                         ld_item <= ld_cnt;
                         ld_pend <= 1'b1;
                         ld_cnt  <= ld_cnt + 4'd1;
-                    end else if (ld_cnt == 4'd8 && !ld_pend) begin
+                    end else if (ld_cnt == n_items && !ld_pend) begin
                         col    <= 2'd0;
                         row    <= 2'd0;
                         tm_col <= {tile, 2'd0};       // start reading old column 0
