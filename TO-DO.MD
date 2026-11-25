@@ -104,23 +104,25 @@ fuzzer) runs anywhere with iverilog + cargo; torch is only needed to re-run
 Everything in docs/blackwell.md is simulated and self-checking (`make regress`,
 20 targets), and none of it has been on the board. In the order I'd do next:
 
-1. **Pick a board subset and measure it.** The tensor core alone is ~7k LUT4
-   per core in yosys (multipliers in LUTs, not the 48 DSPs), the L1 ~2k, the
-   host CPU ~9.7k as written. A board build needs a subset (one MMA kind, no
-   host CPU, maybe one core with the tensor core) and `sv2v` + nextpnr numbers.
-2. **Constrain the new ports.** `gpu.cst` has nothing for the SDRAM
-   (`O_sdram_*`, `IO_sdram_dq`) or the board link (`link_tx`, `link_rx`, which
-   needs a pull-up). Check whether the open-source flow binds the embedded
-   SDRAM by those names.
-3. **Compiler support.** graph_compiler still lowers Linear to FMAC loops. The
-   obvious win is Linear -> TMA + MMA (s8, or e4m3/e2m1 with the quantizer
-   emitting those codes) + TLDQ, which is requantize+ReLU on the way out.
-4. **One instruction per cycle.** The issue loop is 3 cycles (fetch overlaps
-   writeback, operands read in DECODE). Going further needs per-stage control
-   bundles (every unit reads the one decoder today), a scoreboard and per-stage
-   warp tags: a rewrite of the core's control path.
-5. **Host CPU on block RAM.** Its register file and 4 KB RAM do not infer as
-   BSRAM as written (reset loop on the register file, byte-enable RAM style).
+Done since (each its own commit): the design reads straight into yosys;
+feature switches + `oss_build/build_board.sh` with a board subset that places
+and routes; optional SDRAM/link ports (`src/gpu_link.cst`); the host CPU on
+block RAM; `graph_compiler --tc`; pipelined issue (RUN). Next:
+
+1. **Flash the board subset and run it.** `PACK=1 bash oss_build/build_board.sh`
+   (see docs/blackwell.md "Board fit" for its numbers and timing), then
+   `make run-mlp2`-style runs with `MLC_FLAGS=--tc`. Nothing new has touched
+   hardware yet.
+2. **Timing margin.** Check the "Board fit" Fmax line; if a fresh build misses
+   54 MHz, the next long paths are in the cores (lane ALU -> writeback).
+3. **Bigger tensor-core kernels.** --tc code is larger than FMAC code, so deep
+   models hit the 256-word ROM (fuzz rejects ~1 in 5). Fold the peeled first
+   MMA into the loop, and use the command-stream/overlay idea (below) to load
+   layers one at a time.
+4. **FP8/FP4 through the compiler.** The quantizer could emit e4m3/e2m1 codes
+   for --tc; the hardware and reference model already support them.
+5. **Warp interleaving in RUN.** Issue from another ready warp instead of
+   bubbling on a dependency or a taken branch, with a scoreboard.
 
 Gotchas from this round:
 

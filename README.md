@@ -141,11 +141,13 @@ A B200 has ~148 SMs and 192 GB of HBM3e. None of that scale fits on a $30 FPGA. 
 - **TMA.** A copy engine that streams operand tiles into shared memory while the previous MMA runs.
 - **Global memory.** The in-package 64 Mbit SDRAM, shared by both cores and the host, with a controller, a per-core L1, `LDG`/`STG`, and TMA from global.
 - **Clusters.** The two cores as a pair: distributed shared memory, a cluster barrier, and a 2-SM MMA with B split across the cores.
-- **Overlapped issue.** 3 cycles per compute instruction instead of 6.
+- **Pipelined issue.** ALU code runs at 1.77 cycles per instruction instead of 6: the next instruction decodes while the current one executes and the one before writes back.
 - **An on-chip host CPU.** An RV32I core running C firmware that loads, launches, and checks GPU kernels through the shared SDRAM. Grace, at this scale.
 - **A board-to-board link.** Two wires, remote global stores, and an all-reduce across two simulated boards. NVLink, at this scale.
 
-All of it is simulated and self-checking (`make regress`). None of it has been built for the board or run on it yet. It will not all fit at once; [the board-fit notes](docs/blackwell.md#board-fit) have yosys estimates.
+- **The compiler uses the tensor core.** `graph_compiler --tc` lowers every Linear to TMA + MMA + TLDQ: the trained MLP runs 32x faster, bit-identical.
+
+All of it is simulated and self-checking (`make regress`). It does not all fit on the chip at once: `oss_build/build_board.sh` builds a board subset (2 cores x 4 lanes with the tensor core, TMA, shared memory and clusters) that places and routes at 78% of the LUTs; timing and details in [board fit](docs/blackwell.md#board-fit)). None of it has run on hardware yet.
 
 ## Instruction set
 
