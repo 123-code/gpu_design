@@ -19,6 +19,7 @@ drive each one and the testbench that proves it.
 | [Overlapped issue](#overlapped-issue) | the SM's instruction pipeline | `make sim-cpi` |
 | [On-chip host CPU](#on-chip-host-cpu) | Grace + NVLink-C2C (GB200's CPU sharing memory with the GPU) | `make sim-host` |
 | [Board-to-board link](#board-to-board-link) | NVLink / NVL72 (GPUs storing into each other's memory) | `make sim-link` |
+| [Linear on the tensor core](#linear-on-the-tensor-core) | cuBLAS/CUTLASS lowering a GEMM onto tensor cores | `make fuzz-tc`, `make sim-mlc MLC_FLAGS=--tc` |
 
 Everything here is checked in simulation (`make regress`). None of it has been
 built for or run on the board yet; see [Board fit](#board-fit).
@@ -463,6 +464,51 @@ In phase 1 each board stores its vector into the other's memory. In phase 2
 each board adds its own vector and the received one. Both boards must end
 with v_A + v_B, and each direction must have carried exactly 8 packets.
 With remote routing disabled, no packets move and the test fails.
+
+---
+
+## Linear on the tensor core
+
+`graph_compiler --tc` lowers every `Linear` onto the tensor core instead of
+the FMAC loop: the step from "the hardware has a tensor core" to "the
+compiler uses it".
+
+- **A new MMA kind, `u8` (kind 4): int8 A x uint8 B.** Quantized inference
+  multiplies signed weights by post-ReLU activations (0..255), which do not
+  fit `s8`. A = 4 neurons x 4 inputs of weights, B column 0 = 4 activations
+  (columns 1..3 stay zero), so D column 0 is 4 neurons' accumulators.
+- **The planner lays the weights out in tile order**: 16-byte 4x4 tiles,
+  zero-padded at the edges, so each A tile is a single `TMA`.
+- **`TLDQ` is FOUT.** `clamp(D >>> (8 + shift), 0, 255)` is exactly the
+  requantize + ReLU the FMAC path's `FOUT` does, so the compiler's bit-exact
+  reference (`eval`) is unchanged and the output must match bit for bit.
+  Each lane stores its own neuron.
+- **One hardware rule made the loop safe**: a `TMA` waits while the tensor
+  core is still reading its operands out of shared memory (`copy_engine`
+  `hold`). So "MMA this tile; TMA the next one" needs no double buffering:
+  the next tile streams in while the MMA computes, after it has its data.
+
+Per neuron group: `TMA` the weight tile, `TMA` 4 activations, `TMAWAIT`,
+`MMA` (accumulate after the first block), and at the end of the group one
+`TLDQ` and a store.
+
+| 2-layer MLP 169 -> 32 -> 10, 1 warp x 9 lanes (`make sim-mlc`) | kernel cycles |
+|---|---|
+| FMAC loops (default) | 829,826 |
+| `--tc` | 25,677 |
+
+32x on this model, bit-identical scores. `make fuzz-tc` fuzzes random graphs
+with `--tc` against the same three-way check as `make fuzz`; seeds 1-6 and
+11-24 pass, and three deep models are rejected at compile time because the
+tensor-core code is larger and they no longer fit 256 instruction words.
+
+The fuzzer found one real problem on the way: the last input block of a
+Linear reads 4 activations even when fewer are real. Those bytes meet zero
+weights, so on hardware their value never matters, but in simulation X * 0
+is X and it poisoned the result. The planner now rounds such inputs up to 4
+bytes and the prologue zeroes the padding.
+
+Needs a 1-warp launch, as the FMAC path already does.
 
 ---
 

@@ -28,7 +28,7 @@ import random
 import tc_ref as tc
 
 RESULT_BASE = 256
-QSHIFT = {0: 6, 1: 9, 2: 9, 3: 9}
+QSHIFT = {0: 6, 1: 9, 2: 9, 3: 9, 4: 8}
 
 
 def tile_bytes(words):

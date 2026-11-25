@@ -10,7 +10,8 @@ Kinds (TCFG kind field):
   0  s8    int8 x int8, K = 4. D is a plain int32.
   1  e4m3  FP8 (1-4-3, bias 7), K = 4.
   2  e2m1  FP4 (1-2-1, bias 1), K = 8 (two per byte, low nibble first).
-  3  mxf4  e2m1 with E8M0 block scales (OCP MX), K = 8. Row i of A has
+  3  mxf4  e2m1 with E8M0 block scales (OCP MX), K = 8.
+  4  u8    A int8 x B uint8, K = 4 (weights x post-ReLU activations). Row i of A has
            scale byte sa[i] at A + 16 + i, column j of B has sb[j] at
            B + 16 + j; the block is one MMA's K.
 
@@ -30,8 +31,8 @@ Products of two such numbers are integers in units of 2^-18 (e4m3) or 2^-2
 import random
 
 D_FRAC = 8
-KINDS = {"s8": 0, "e4m3": 1, "e2m1": 2, "mxf4": 3}
-K_OF = {0: 4, 1: 4, 2: 8, 3: 8}
+KINDS = {"s8": 0, "e4m3": 1, "e2m1": 2, "mxf4": 3, "u8": 4}
+K_OF = {0: 4, 1: 4, 2: 8, 3: 8, 4: 4}
 
 
 def wrap32(x):
@@ -69,7 +70,7 @@ def e2m1_value(code):
 
 def elems(word, kind):
     """The K operand codes packed in one 32-bit word."""
-    if kind in (0, 1):
+    if kind in (0, 1, 4):
         return [(word >> (8 * k)) & 0xFF for k in range(4)]
     return [(word >> (4 * k)) & 0xF for k in range(8)]
 
@@ -80,6 +81,8 @@ def dot_exact(arow, bcol, kind):
     a, b = elems(arow, kind), elems(bcol, kind)
     if kind == 0:
         return sum(s8(x) * s8(y) for x, y in zip(a, b))
+    if kind == 4:
+        return sum(s8(x) * y for x, y in zip(a, b))
     parts = e4m3_parts if kind == 1 else e2m1_parts
     tot = 0
     for x, y in zip(a, b):
@@ -95,7 +98,7 @@ MX_SHIFT_MIN, MX_SHIFT_MAX = -24, 24
 def contribution(arow, bcol, kind, sa=127, sb=127):
     """What one (i, j) adds to D (an int, before the mod-2^32 wrap)."""
     d = dot_exact(arow, bcol, kind)
-    if kind == 0:
+    if kind in (0, 4):
         return d
     if kind == 1:
         return d >> (18 - D_FRAC)            # floor into Q.8
@@ -127,7 +130,7 @@ def tldq(d, shift):
 
 def pack(codes, kind):
     w = 0
-    if kind in (0, 1):
+    if kind in (0, 1, 4):
         for k, c in enumerate(codes):
             w |= (c & 0xFF) << (8 * k)
     else:
@@ -137,7 +140,7 @@ def pack(codes, kind):
 
 
 def random_word(rng, kind):
-    if kind == 0:
+    if kind in (0, 4):
         return pack([rng.randrange(256) for _ in range(4)], kind)
     if kind == 1:
         # bias toward moderate exponents so sums are not all floor-to-0

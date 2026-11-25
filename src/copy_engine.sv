@@ -21,6 +21,12 @@
 // One copy in flight; a TMA issued while one is running waits for it (the
 // scheduler parks and retries, like a tensor-core op on a busy unit).
 //
+// `hold` (the tensor core is staging its operands out of shared memory)
+// pauses the engine's reads, so a TMA issued right after an MMA cannot
+// overwrite a tile the MMA has not fetched yet. That makes the loop
+// "MMA this tile; TMA the next one" safe without double buffering: the copy
+// streams in while the MMA computes, after it has its operands.
+//
 // `TMAG` copies from GLOBAL memory (SDRAM) instead -- the source a real TMA
 // reads. The source must be 16-byte aligned; the engine fetches whole
 // 16-byte lines through the core's global-memory port (bypassing the L1, as
@@ -36,12 +42,13 @@ module copy_engine #(
     input  wire [ADDR_BITS-1:0] src,         // data-memory byte address
     input  wire [9:0]           dst,         // shared byte address (word aligned)
     input  wire [3:0]           nwords,      // 1..8
+    input  wire                 hold,        // tensor core is reading shared memory
     input  wire                 src_global,  // TMAG: src is a global byte address
     input  wire [15:0]          gsrc,
     output wire                 busy,
 
     // global-memory port (line reads)
-    output reg                  m_req,
+    output wire                 m_req,
     output wire [20:0]          m_addr,
     input  wire                 m_ack,
     input  wire                 m_rvalid,
@@ -75,7 +82,9 @@ module copy_engine #(
     reg [3:0]           g_words;             // words still to land (global mode)
 
     assign busy    = active;
-    assign rd_req  = active && !gmode && (left != 6'd0);
+    reg                 m_req_r;
+    assign m_req   = m_req_r && !hold;
+    assign rd_req  = active && !gmode && (left != 6'd0) && !hold;
     assign m_addr  = {7'd0, g_line[15:4], 2'b00};
     assign wr_req  = active;
     assign rd_addr = s_ptr;
@@ -89,7 +98,7 @@ module copy_engine #(
             left   <= 6'd0;
             inflight_left <= 6'd0;
             gmode  <= 1'b0;
-            m_req  <= 1'b0;
+            m_req_r  <= 1'b0;
         end else begin
             sh_we <= 1'b0;
             wr_ok <= active;
@@ -99,7 +108,7 @@ module copy_engine #(
                     gmode         <= src_global;
                     g_line        <= {gsrc[15:4], 4'd0};
                     g_words       <= nwords;
-                    m_req         <= src_global;
+                    m_req_r         <= src_global;
                     s_ptr         <= src;
                     d_ptr         <= {dst[9:2], 2'b00};
                     left          <= {nwords, 2'b00};
@@ -108,7 +117,7 @@ module copy_engine #(
                 end
             end else if (gmode) begin
                 // global: one 4-word burst per line, each beat one shared word
-                if (m_ack) m_req <= 1'b0;
+                if (m_ack) m_req_r <= 1'b0;
                 if (m_rvalid && g_words != 4'd0) begin
                     sh_we    <= 1'b1;
                     sh_waddr <= d_ptr[9:2];
@@ -122,7 +131,7 @@ module copy_engine #(
                         active <= 1'b0;
                     end else begin
                         g_line <= g_line + 16'd16;      // next line
-                        m_req  <= 1'b1;
+                        m_req_r  <= 1'b1;
                     end
                 end
             end else begin

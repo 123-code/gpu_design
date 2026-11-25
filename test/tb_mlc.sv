@@ -45,6 +45,9 @@ module tb;
     reg [7:0]  got  [0:255];
     reg [8*512-1:0] prog_file, data_file, expect_file;
     integer prog_words, data_bytes, n_reply, max_cycles;
+    // kernel run time: from launch (GPU enabled) to done, UART transfer excluded
+    integer kcycles = 0;
+    always @(posedge clk) if (dut.gpu_enable && !dut.done) kcycles = kcycles + 1;
 
     task uart_send(input [7:0] b);
         integer k;
@@ -107,7 +110,7 @@ module tb;
                 fails = fails + 1;
                 $display("  byte %0d: got %02x expect %02x", i, got[i], want[i]);
             end
-        if (fails == 0) $display("RESULT: PASS cycles=%0d", $time / 10);
+        if (fails == 0) $display("RESULT: PASS cycles=%0d kernel=%0d", $time / 10, kcycles);
         else            $display("RESULT: FAIL %0d of %0d bytes wrong", fails, n_reply);
         $finish;
     end
@@ -116,6 +119,11 @@ module tb;
         if (!$value$plusargs("MAX_CYCLES=%d", max_cycles)) max_cycles = 20000000;
         repeat (max_cycles) @(posedge clk);
         $display("RESULT: TIMEOUT after %0d cycles", max_cycles);
+        $display("  core0 state=%0d pc=%0d warp_status=%0d tc_busy=%0b tma_busy=%0b tc_state=%0d",
+                 dut.uut.compute_core_0.core_state, dut.uut.compute_core_0.fetch_addr,
+                 dut.uut.compute_core_0.core_scheduler.warp_status[0],
+                 dut.uut.compute_core_0.tc_busy, dut.uut.compute_core_0.tma_busy,
+                 dut.uut.compute_core_0.tcg.u_tc.state);
         $finish;
     end
 endmodule

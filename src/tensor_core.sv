@@ -26,6 +26,8 @@
 //   0 s8    int8 x int8, K = 4.            D is a plain int32.
 //   1 e4m3  FP8  (1-4-3), K = 4.           D is fixed point, 8 frac bits.
 //   2 e2m1  FP4  (1-2-1), K = 8, two per byte (low nibble first). Q.8.
+//   4 u8    A int8 x B uint8, K = 4. D int32. For quantized inference:
+//           A = weights (signed), B = post-ReLU activations (0..255).
 //   3 mxf4  e2m1 with OCP-MX block scales, K = 8. Each row of A and each
 //           column of B carries one E8M0 scale (2^(s-127)); the 4 scale
 //           bytes sit right after the tile (A+16, B+16). Block = one MMA's K.
@@ -55,7 +57,7 @@
 // ============================================================================
 module tensor_core #(
     parameter TMEM_COLS = 16,
-    parameter KINDS     = 4'b1111      // kinds built (bit k = kind k); others compute 0
+    parameter KINDS     = 5'b11111     // kinds built (bit k = kind k); others compute 0
 ) (
     input  wire        clk,
     input  wire        reset,
@@ -167,6 +169,14 @@ module tensor_core #(
             dot_s8 = dot_s8 + $signed(arow[8*k +: 8]) * $signed(bcol[8*k +: 8]);
     end
 
+    // u8: signed A x unsigned B (weights x activations)
+    reg signed [31:0] dot_u8;
+    always @(*) begin
+        dot_u8 = 32'sd0;
+        for (k = 0; k < 4; k = k + 1)
+            dot_u8 = dot_u8 + $signed(arow[8*k +: 8]) * $signed({1'b0, bcol[8*k +: 8]});
+    end
+
     // e4m3: value = M * 2^(E-9), M = {e!=0, mant}, E = max(e,1)-1.
     // Product of two = (Ma*Mb) << (Ea+Eb) units of 2^-18; four summed
     // exactly in 40 bits.
@@ -234,6 +244,7 @@ module tensor_core #(
             3'd1:    dot = KINDS[1] ? (dot_fp8 >>> 10) : 32'sd0;            // 2^-18 -> Q.8, floor
             3'd2:    dot = KINDS[2] ? ({{16{dot_fp4[15]}}, dot_fp4} <<< 6) : 32'sd0;  // 2^-2 -> Q.8
             3'd3:    dot = KINDS[3] ? mx_val[31:0] : 32'sd0;
+            3'd4:    dot = KINDS[4] ? dot_u8 : 32'sd0;
             default: dot = KINDS[0] ? dot_s8 : 32'sd0;
         endcase
     end

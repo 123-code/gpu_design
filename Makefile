@@ -6,7 +6,7 @@ IVERILOG  ?= iverilog
 VVP       ?= vvp
 VERILATOR ?= verilator
 
-.PHONY: regress regress-full sim-subset sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
+.PHONY: regress regress-full fuzz-tc sim-mlc sim-subset sim-grid sim-smem sim-mma sim-mma-all sim-tma sim-sdram sim-global sim-cluster sim-cpi sim-drain sim-host sim-link mlc sim-mlp2 run-mlp2 drill drill-peek sim sim-vl sim-loadrun sim-divergence sim-divmerge sim-warps sim-mac32 sim-mlp build build-oss build-oss-max flash flash-oss flash-oss-max flash-persist bench asm demo record clean run-jpp sim-nn sim-mnist-jpp sim-jpp-features sim-mnist-jpp-full run-mnist-jpp sim-raycast run-raycast sim-hdmi build-oss-hdmi flash-oss-hdmi
 
 # Regression: every self-checking testbench that runs in a few seconds.
 # regress-full adds the minute-scale end-to-end sims and a short fuzz.
@@ -19,6 +19,7 @@ regress:        ## Run the fast self-checking testbenches; stops at the first FA
 regress-full:   ## regress + the slow end-to-end sims + a 20-model fuzz
 	@python3 test/regress.py $(REGRESS_FULL)
 	cd software && python3 fuzz_mlc.py --n 20 --seed 1
+	cd software && python3 fuzz_mlc.py --n 10 --seed 1 --tc
 
 # Run any testbench under Verilator (the tool the job posting names) instead of
 # iverilog. Verilator is a stricter linter and much faster; --timing lets it
@@ -133,6 +134,7 @@ sim-mnist-jpp:  ## AI demo: the MNIST classifier written in J++ (mnist_fc.jpp) p
 
 # ---- ML compiler: model JSON -> data image + kernel, nothing baked in the bitstream ----
 MODEL ?= mlp_169_32_10
+MLC_FLAGS ?=      # --tc: Linear layers on the tensor core
 IMAGE ?= 0
 TORCH_PY ?= $(HOME)/cnn_chip/venv/bin/python
 # per-model frontend; default is the torch-free random-weight exporter
@@ -140,7 +142,7 @@ EXPORT_mnist_mlp = $(TORCH_PY) export_torch.py --image $(IMAGE)
 EXPORT_mnist_cnn = $(EXPORT_mnist_mlp)
 mlc:            ## Compile a model: export -> graph_compiler -> asm -> hex. Usage: make mlc MODEL=mnist_mlp IMAGE=3
 	cd software && $(or $(EXPORT_$(MODEL)),python3 export_model.py) models/$(MODEL).json
-	cd software && cargo run --quiet --bin graph_compiler -- models/$(MODEL).json
+	cd software && cargo run --quiet --bin graph_compiler -- models/$(MODEL).json $(MLC_FLAGS)
 	cd software && cargo run --quiet -- build/$(MODEL).asm build/$(MODEL).hex
 
 sim-mlp2:       ## AI demo: 2-layer int8 MLP, compiled end to end, checked byte-for-byte vs the reference
@@ -151,6 +153,15 @@ sim-mlp2:       ## AI demo: 2-layer int8 MLP, compiled end to end, checked byte-
 FUZZ_N ?= 200
 fuzz:           ## Differential fuzz: FUZZ_N random models, graph reference == compiler reference == RTL (seed with FUZZ_SEED)
 	cd software && python3 fuzz_mlc.py --n $(FUZZ_N) --seed $(or $(FUZZ_SEED),1)
+
+sim-mlc:        ## Any compiled model on the generic harness (1 warp x 9 lanes). Usage: make sim-mlc MODEL=mlp_169_32_10 MLC_FLAGS=--tc
+	$(MAKE) mlc
+	$(IVERILOG) -g2012 -s tb -o sim_mlc test/tb_mlc.sv src/*.sv
+	b=software/build/$(MODEL); $(VVP) -n sim_mlc +PROG=$$b.hex +DATA=$$b.data.hex +EXPECT=$$b.expect.hex \
+	  +PROG_WORDS=$$(wc -l < $$b.hex) +DATA_BYTES=$$(wc -l < $$b.data.hex) +N_REPLY=$$(wc -l < $$b.expect.hex) | grep RESULT
+
+fuzz-tc:        ## The same fuzz, compiled with --tc (every Linear on the tensor core)
+	cd software && python3 fuzz_mlc.py --n $(FUZZ_N) --seed $(or $(FUZZ_SEED),1) --tc
 
 run-mlp2:       ## Run the compiled 2-layer MLP on the FPGA and read back scores + prediction
 	$(MAKE) mlc
@@ -222,8 +233,8 @@ sim-mma:        ## Tensor core: 3 MMAs into TMEM + TLD/TLDQ readback vs the bit-
 	$(IVERILOG) -g2012 -s tb -o sim_mma test/tb_mma.sv src/*.sv
 	$(VVP) sim_mma +prefix=software/build/mma_$(MMA_KIND)
 
-sim-mma-all:    ## Tensor core, every kind: s8, e4m3 (FP8), e2m1 (FP4), mxf4 (FP4 + E8M0 block scales)
-	@for k in s8 e4m3 e2m1 mxf4; do $(MAKE) -s sim-mma MMA_KIND=$$k | grep -E 'RESULT|byte'; done
+sim-mma-all:    ## Tensor core, every kind: s8, e4m3 (FP8), e2m1 (FP4), mxf4 (FP4 + E8M0 block scales), u8
+	@for k in s8 e4m3 e2m1 mxf4 u8; do $(MAKE) -s sim-mma MMA_KIND=$$k | grep -E 'RESULT|byte'; done
 
 sim-tma:        ## TMA: the copy engine stages tensor-core operands while the previous MMA runs (all kinds)
 	@mkdir -p software/build

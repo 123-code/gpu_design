@@ -11,7 +11,7 @@ module core #(
     // "Board fit"). Disabled units are not instantiated; their instructions
     // complete without effect (loads from a missing global memory read 0).
     parameter TC_ENABLE   = 1,       // tensor core + TMEM
-    parameter TC_KINDS    = 4'b1111, // MMA kinds built: bit k = kind k (s8, e4m3, e2m1, mxf4)
+    parameter TC_KINDS    = 5'b11111, // MMA kinds built: bit k = kind k (s8, e4m3, e2m1, mxf4, u8)
     parameter TMA_ENABLE  = 1,       // bulk copy engine
     parameter GMEM_ENABLE = 1        // L1 + global-memory port
 ) (
@@ -735,7 +735,8 @@ module core #(
             .src(rs_bus[current_warp][0][ADDR_BITS-1:0]),
             .dst(rt_bus[current_warp][0][9:0]),
             .nwords((decoded_immediate[5:3] == 3'd0) ? 4'd8 : {1'b0, decoded_immediate[5:3]}),
-            .src_global(decoded_tma_global),
+            .hold(sh_rd_hold),
+        .src_global(decoded_tma_global),
             .gsrc(rs_bus[current_warp][0]),
             .busy(tma_busy),
             .m_req(engm_req),

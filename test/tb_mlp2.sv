@@ -41,6 +41,10 @@ module tb;
         .led(led)
     );
 
+    // kernel run time: from launch (GPU enabled) to done, UART excluded
+    integer kcycles = 0;
+    always @(posedge clk) if (dut.gpu_enable && !dut.done) kcycles = kcycles + 1;
+
     always #5 clk = ~clk;
 
     reg [15:0] prog [0:PROG_WORDS-1];
@@ -103,6 +107,7 @@ module tb;
             end
         end
 
+        $display("kernel %0d cycles (launch to done)", kcycles);
         if (fails == 0)
             $display("RESULT: PASS - 2-layer int8 MLP matches the reference exactly (pred=%0d)",
                      got[N_REPLY-1]);

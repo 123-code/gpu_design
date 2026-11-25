@@ -47,7 +47,7 @@ module top #(
     // GMEM_ENABLE=0 drops the SDRAM controller, its arbiter, the cores' L1s
     // and the link (the host CPU needs global memory too).
     parameter TC_ENABLE   = 1,
-    parameter TC_KINDS    = 4'b1111,
+    parameter TC_KINDS    = 5'b11111,
     parameter TMA_ENABLE  = 1,
     parameter GMEM_ENABLE = 1,
     parameter LINK_ENABLE = 1

@@ -15,7 +15,7 @@ module gpu #(
     parameter WARPS_PER_CORE = 2,
     // feature switches (see core.sv)
     parameter TC_ENABLE   = 1,
-    parameter TC_KINDS    = 4'b1111,
+    parameter TC_KINDS    = 5'b11111,
     parameter TMA_ENABLE  = 1,
     parameter GMEM_ENABLE = 1
 ) (

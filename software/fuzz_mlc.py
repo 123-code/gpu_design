@@ -10,7 +10,8 @@ A mismatch between ref and expect is a lowering bug; between expect and RTL a
 codegen / assembler / hardware bug. Cases the compiler rejects are counted,
 not failed (the planner refusing a model is the correct behavior).
 
-Usage: python3 fuzz_mlc.py [--n 50] [--seed 1] [--jobs 8] [--keep]
+Usage: python3 fuzz_mlc.py [--n 50] [--seed 1] [--jobs 8] [--keep] [--tc]
+  --tc  compile with graph_compiler --tc (Linear on the tensor core)
 Repro one case: python3 fuzz_mlc.py --n 1 --seed <case seed> --keep
 """
 import json, os, random, shutil, subprocess, sys
@@ -22,6 +23,7 @@ OUT = os.path.join(HERE, "build", "fuzz")
 COMPILER = os.path.join(HERE, "target", "debug", "graph_compiler")
 ASSEMBLER = os.path.join(HERE, "target", "debug", "software")
 SIM = os.path.join(HERE, "build", "sim_mlc")   # gitignored
+TC = "--tc" in sys.argv[1:]
 
 
 # ---- random graphs ----------------------------------------------------------
@@ -172,12 +174,14 @@ def reference(g, peaks=None):
 
 def run_case(seed):
     d = os.path.join(OUT, str(seed))
+    if TC:
+        d = os.path.join(OUT, f"tc{seed}")
     os.makedirs(d, exist_ok=True)
     g = random_graph(seed)
     json.dump(g, open(os.path.join(d, "model.json"), "w"))
     ops = "-".join(n["op"] for n in g["nodes"] if n["op"] not in ("Relu", "Flatten", "Argmax"))
 
-    r = subprocess.run([COMPILER, "model.json"], cwd=d, capture_output=True, text=True)
+    r = subprocess.run([COMPILER, "model.json"] + (["--tc"] if TC else []), cwd=d, capture_output=True, text=True)
     if r.returncode != 0:
         return seed, "REJECT", ops, (r.stderr.strip().splitlines() or ["?"])[-1]
     b = os.path.join(d, "build", g["model_name"])

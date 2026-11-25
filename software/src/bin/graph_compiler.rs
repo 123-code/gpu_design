@@ -11,7 +11,14 @@
 // silently predicted nonsense. Here the planner assigns every address and the
 // code generator asks the planner for them, so they cannot disagree.
 //
-// Usage: cargo run --bin graph_compiler -- [models/foo.json]
+// Usage: cargo run --bin graph_compiler -- [models/foo.json] [--tc]
+//
+//   --tc  lower every Linear onto the tensor core (MMA kind u8: int8 weights x
+//         uint8 activations) instead of FMAC loops: TMA stages a 4x4 weight
+//         tile and 4 activations into shared memory, MMA accumulates into TMEM,
+//         TLDQ does the requantize + ReLU on the way out (same math as FOUT,
+//         so eval() is unchanged and the output must match bit for bit).
+//         Needs a 1-warp launch (as fc_mac already does).
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -242,7 +249,29 @@ struct Plan {
     total: usize,
 }
 
-fn plan(m: &Model) -> Result<Plan, String> {
+/// Bytes a layer's output buffer occupies. A tensor-core Linear writes whole
+/// 4-neuron groups, and every lane stores (lanes past the 4-row tile store 0
+/// a few bytes on), so it gets the rounded-up size plus 8 bytes of slack.
+fn buf_len(l: &Layer, tc: bool) -> usize {
+    match &l.kind {
+        Kind::Dense { out_f, .. } if tc => 4 * ((out_f + 3) / 4) + 8,
+        _ => l.out_len(),
+    }
+}
+
+/// Zero bytes after layer i's output that a tensor-core Linear reading it
+/// will touch: it fetches activations 4 at a time, so an input whose length
+/// is not a multiple of 4 is over-read by up to 3 bytes. Those bytes meet
+/// zero weights, so their value never matters on hardware, but they must be
+/// defined (in simulation X * 0 is X). A tensor-core Linear's own output is
+/// already written in whole groups of 4, so only other producers need it.
+fn tc_pad(m: &Model, i: usize, tc: bool) -> usize {
+    let feeds_tc = tc && matches!(m.layers.get(i + 1).map(|l| &l.kind), Some(Kind::Dense { .. }));
+    let is_tc_dense = tc && matches!(m.layers[i].kind, Kind::Dense { .. });
+    if feeds_tc && !is_tc_dense { (4 - m.layers[i].out_len() % 4) % 4 } else { 0 }
+}
+
+fn plan(m: &Model, tc: bool) -> Result<Plan, String> {
     let mut image: Vec<u8> = Vec::new();
     let mut x = vec![0usize];
     let mut w = Vec::new();
@@ -264,20 +293,39 @@ fn plan(m: &Model) -> Result<Plan, String> {
             if !(-128..=127).contains(&v) {
                 return Err(format!("layer {}: weight {} is not int8", l.name, v));
             }
-            image.push(v as i8 as u8);
+        }
+        match &l.kind {
+            // tensor core: 4x4 tiles in (neuron block, input block) order, each
+            // tile 4 rows of 4 consecutive inputs, zero-padded at the edges
+            Kind::Dense { in_f, out_f, weights, .. } if tc => {
+                let (mb, kb) = ((out_f + 3) / 4, (in_f + 3) / 4);
+                for b in 0..mb {
+                    for c in 0..kb {
+                        for i in 0..4 {
+                            for kk in 0..4 {
+                                let (o, k) = (4 * b + i, 4 * c + kk);
+                                let v = if o < *out_f && k < *in_f { weights[o * in_f + k] } else { 0 };
+                                image.push(v as i8 as u8);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => image.extend(l.weights().iter().map(|&v| v as i8 as u8)),
         }
     }
 
     // Activation buffers: written by the GPU, never loaded, so they sit after
     // the image and cost nothing on the wire.
     let mut cursor = image.len();
-    for l in &m.layers {
+    for (i, l) in m.layers.iter().enumerate() {
+        let len = buf_len(l, tc) + tc_pad(m, i, tc);
         // a store to MMIO_TX is the UART, not memory: never place a GPU-written buffer over it
-        if (cursor..cursor + l.out_len()).contains(&MMIO_TX) {
+        if (cursor..cursor + len).contains(&MMIO_TX) {
             cursor = MMIO_TX + 1;
         }
         x.push(cursor);
-        cursor += l.out_len();
+        cursor += len;
     }
 
     Ok(Plan { x, w, image, total: cursor })
@@ -285,7 +333,7 @@ fn plan(m: &Model) -> Result<Plan, String> {
 
 /// Reject anything the hardware would execute incorrectly, instead of emitting
 /// a program that silently computes the wrong thing.
-fn check(m: &Model, p: &Plan) -> Result<(), String> {
+fn check(m: &Model, p: &Plan, tc: bool) -> Result<(), String> {
     if p.total > m.memory_budget_bytes {
         return Err(format!(
             "out of memory: model needs {} bytes, main_memory.sv holds {}",
@@ -295,7 +343,7 @@ fn check(m: &Model, p: &Plan) -> Result<(), String> {
     for (i, l) in m.layers.iter().enumerate() {
         // A store to address 63 goes to the UART instead of memory, so no buffer the
         // GPU WRITES may contain it. (Read-only tensors are fine.)
-        let (lo, hi) = (p.x[i + 1], p.x[i + 1] + l.out_len());
+        let (lo, hi) = (p.x[i + 1], p.x[i + 1] + buf_len(l, tc) + tc_pad(m, i, tc));
         if (lo..hi).contains(&MMIO_TX) {
             return Err(format!("layer {} output spans address {} (the memory-mapped UART)", l.name, MMIO_TX));
         }
@@ -397,6 +445,88 @@ fn gen_dense(asm: &mut Vec<String>, i: usize, l: &Layer, p: &Plan) {
     asm.push("    ADDI R3, R3, #1".into());
     asm.push(format!("    BR   {}", outer));
     asm.push(format!("{}:", end));
+}
+
+// Tensor-core Linear. Shared memory: A tile at 0 (16 B), B at 16, where only
+// word 0 (4 activations) is ever written; words 1..3 are zeroed once by the
+// prologue, so columns 1..3 of D stay 0 and column 0 is the 4 neurons.
+// Register plan:
+//   R0 weight-tile pointer (walks the tiled block, never resets)
+//   R1 activation pointer (reset per neuron group)   R2 its end
+//   R3 output pointer (neuron group base)            R6 its end
+//   R4 = 0 / R5 = 16: shared addresses of A / B      R7 scratch
+fn gen_dense_tc(asm: &mut Vec<String>, i: usize, l: &Layer, p: &Plan) {
+    let Kind::Dense { in_f, out_f, shift, .. } = l.kind else { unreachable!() };
+    let (xin, xout, wb) = (p.x[i], p.x[i + 1], p.w[i]);
+    let (mb, kb) = ((out_f + 3) / 4, (in_f + 3) / 4);
+    let lb = |s: &str| format!("L{}_{}", i, s);
+
+    asm.push(format!("// ---- layer {} : {} -> {} on the tensor core (u8 x s8), TLDQ >>> {} ----",
+                     l.name, in_f, out_f, 8 + shift));
+    asm.push(lit(7, ((8 + shift as usize) << 3) | 4));
+    asm.push("    TCFG R7".into());                 // kind u8, readout shift 8+shift
+    asm.push("    MOV  R4, #0".into());
+    asm.push("    MOV  R5, #16".into());
+    asm.push(lit(0, wb));
+    asm.push(lit(2, xin + 4 * kb));
+    asm.push(lit(3, xout));
+    asm.push(lit(6, xout + 4 * mb));
+    asm.push(format!("{}:", lb("group")));
+    asm.push("    CMP  R3, R6".into());
+    asm.push(format!("    BRzp {}", lb("end")));
+    asm.push(lit(1, xin));
+    // first input block overwrites D, the rest accumulate
+    for acc in [0, 1] {
+        if acc == 1 {
+            asm.push(format!("{}:", lb("blk")));
+            asm.push("    CMP  R1, R2".into());
+            asm.push(format!("    BRzp {}", lb("out")));
+        }
+        // a TMA issued right after an MMA waits (in hardware) until the MMA
+        // has fetched its operands, so the copy overlaps the multiply safely
+        asm.push("    TMA  R0, R4, #4".into());      // weight tile -> shared A
+        asm.push("    TMA  R1, R5, #1".into());      // 4 activations -> shared B col 0
+        asm.push("    TMAWAIT".into());
+        asm.push(format!("    MMA  R4, R5, #0, #{}", acc));
+        asm.push("    ADDI R0, R0, #16".into());
+        asm.push("    ADDI R1, R1, #4".into());
+        if acc == 1 {
+            asm.push(format!("    BR   {}", lb("blk")));
+        }
+    }
+    asm.push(format!("{}:", lb("out")));
+    asm.push("    TLDQ R7, #0".into());             // lane t: neuron group+t, requantized + ReLU
+    asm.push("    TID  R4".into());
+    asm.push("    ADD  R4, R4, R3".into());
+    asm.push("    STR  R7, [R4]".into());           // each lane stores its own neuron
+    asm.push("    MOV  R4, #0".into());
+    asm.push("    ADDI R3, R3, #4".into());
+    asm.push(format!("    BR   {}", lb("group")));
+    asm.push(format!("{}:", lb("end")));
+}
+
+/// Zero shared-memory words 5..7 (bytes 20..31): B columns 1..3 of every
+/// tensor-core Linear, which are never written afterwards. Then zero the
+/// over-read padding after any input a tensor-core Linear reads (tc_pad).
+fn gen_tc_prologue(asm: &mut Vec<String>, m: &Model, p: &Plan) {
+    asm.push("// ---- tensor-core prologue: zero B columns 1..3 in shared memory ----".into());
+    asm.push("    MOV  R7, #0".into());
+    asm.push("    MOV  R1, #20".into());
+    for _ in 0..6 {
+        asm.push("    STS  R7, [R1]".into());
+        asm.push("    ADDI R1, R1, #2".into());
+    }
+    for i in 0..m.layers.len() {
+        let pad = tc_pad(m, i, true);
+        if pad > 0 {
+            asm.push(format!("// zero {} byte(s) of padding after layer {}'s output", pad, m.layers[i].name));
+            asm.push(lit(1, p.x[i + 1] + m.layers[i].out_len()));
+            for b in 0..pad {
+                if b > 0 { asm.push("    ADDI R1, R1, #1".into()); }
+                asm.push("    STR  R7, [R1]".into());
+            }
+        }
+    }
 }
 
 // Register plan, per Conv kernel (one output pixel = one neuron over a KxK window):
@@ -638,17 +768,24 @@ fn eval(m: &Model) -> (Vec<Vec<u8>>, usize) {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or_else(|| "models/mlp_169_32_10.json".into());
+    let path = std::env::args().skip(1).find(|a| !a.starts_with("--"))
+        .unwrap_or_else(|| "models/mlp_169_32_10.json".into());
     let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {}", path, e));
     let graph: Graph = serde_json::from_str(&src).expect("bad graph JSON");
     let model = lower(graph).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
 
-    let p = plan(&model).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
-    check(&model, &p).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
+    let tc = std::env::args().any(|a| a == "--tc");
+    let p = plan(&model, tc).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
+    check(&model, &p, tc).unwrap_or_else(|e| { eprintln!("ERROR: {}", e); std::process::exit(1) });
 
-    let mut asm = vec![format!("// {} - generated by graph_compiler, do not edit", model.model_name)];
+    let mut asm = vec![format!("// {} - generated by graph_compiler{}, do not edit",
+                               model.model_name, if tc { " --tc" } else { "" })];
+    if tc && model.layers.iter().any(|l| matches!(l.kind, Kind::Dense { .. })) {
+        gen_tc_prologue(&mut asm, &model, &p);
+    }
     for (i, l) in model.layers.iter().enumerate() {
         match l.kind {
+            Kind::Dense { .. } if tc => gen_dense_tc(&mut asm, i, l, &p),
             Kind::Dense { .. } => gen_dense(&mut asm, i, l, &p),
             Kind::Conv { .. } => gen_conv(&mut asm, i, l, &p),
             Kind::Pool { .. } => gen_pool(&mut asm, i, l, &p),
